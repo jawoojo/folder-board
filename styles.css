@@ -1,0 +1,1370 @@
+/* [ID 2.0] Obsidian 다크 테마 기반 토큰 및 기본 리셋 */
+/* -> 실제 옵시디언 플러그인으로 이식했을 때의 시각적 밀도와 대비를 사전에 검증하기 위해 옵시디언 팔레트를 그대로 모사 */
+:root {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #181818;
+  --bg-tertiary: #242424;
+  --bg-card: #232327;
+  --bg-card-hover: #2a2a30;
+  --bg-elevated: #2d2d34;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text-normal: #dcddde;
+  --text-muted: #999ba3;
+  --text-faint: #6c6e78;
+  --accent: #7f6df2;
+  --accent-hover: #9383f7;
+  --accent-soft: rgba(127, 109, 242, 0.16);
+  --accent-glow: rgba(127, 109, 242, 0.35);
+  --green: #4ade80;
+  --amber: #f59e0b;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --proto-bar-h: 44px;
+  --transition-fast: 140ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-med: 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  overflow: hidden;
+  user-select: none;
+}
+
+button, input, select {
+  font-family: inherit;
+  color: inherit;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  line-height: 1.3;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* 커스텀 스크롤바 */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* =========================================================
+   [ID 2.1] 상단 프로토타입 모드 전환 바
+   ========================================================= */
+.proto-bar {
+  height: var(--proto-bar-h);
+  background: #121215;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  gap: 12px;
+  z-index: 60;
+  position: relative;
+}
+
+.proto-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.proto-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+
+.proto-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 7px;
+  border-radius: 99px;
+}
+
+.proto-modes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+
+.proto-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.proto-mode-btn:hover {
+  color: var(--text-normal);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.proto-mode-btn.active {
+  background: var(--accent-soft);
+  color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(127, 109, 242, 0.45);
+}
+
+.mode-num {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.proto-mode-btn.active .mode-num {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(74, 222, 128, 0.16);
+  color: var(--green);
+}
+
+.proto-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 공용 버튼 스타일 */
+.btn-primary-sm, .btn-primary-xs {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+  white-space: nowrap;
+}
+.btn-primary-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.btn-primary-sm kbd {
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.btn-primary-xs {
+  padding: 4px 9px;
+  font-size: 11.5px;
+}
+.btn-primary-sm:hover, .btn-primary-xs:hover {
+  background: var(--accent-hover);
+}
+
+.btn-ghost-sm, .btn-ghost-xs {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+.btn-ghost-sm {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.btn-ghost-xs {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+.btn-ghost-sm:hover, .btn-ghost-xs:hover {
+  color: var(--text-normal);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-strong);
+}
+
+.icon-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 4px 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12.5px;
+  transition: all var(--transition-fast);
+}
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-normal);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.icon-btn.accent-subtle {
+  background: var(--accent-soft);
+  color: #c7befd;
+  border-color: rgba(127, 109, 242, 0.35);
+  font-size: 11.5px;
+  padding: 3px 8px;
+}
+.icon-btn.accent-subtle:hover {
+  background: rgba(127, 109, 242, 0.28);
+  color: #fff;
+}
+
+/* =========================================================
+   [ID 2.2] 옵시디언 워크스페이스 (리본 + 사이드바 + 메인)
+   ========================================================= */
+.obsidian-app {
+  display: flex;
+  height: calc(100vh - var(--proto-bar-h));
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.obs-ribbon {
+  width: 42px;
+  flex-shrink: 0;
+  background: #151517;
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  gap: 8px;
+}
+
+.ribbon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+.ribbon-btn:hover:not(:disabled) {
+  color: var(--text-normal);
+  background: rgba(255, 255, 255, 0.07);
+}
+.ribbon-btn.active {
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+}
+.ribbon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.ribbon-spacer {
+  flex: 1;
+}
+
+/* 기존 세로 트리 탐색기 */
+.obs-sidebar {
+  width: 245px;
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  transition: width var(--transition-med), opacity var(--transition-fast);
+}
+.obs-sidebar.collapsed {
+  width: 0;
+  overflow: hidden;
+  border-right: none;
+  opacity: 0;
+}
+
+.sidebar-header {
+  height: 38px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sidebar-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.sidebar-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 6px;
+}
+.sidebar-footer {
+  padding: 7px 12px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* 트리 아이템 */
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-normal);
+}
+.tree-row.active {
+  background: var(--accent-soft);
+  color: #fff;
+}
+.tree-row .tree-caret {
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.tree-row .tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-row .tree-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* 메인 컨텐츠 컨테이너 */
+.obs-main {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* =========================================================
+   [ID 2.3] 에디터 패널 (옵시디언 마크다운 뷰어/에디터)
+   ========================================================= */
+.obs-editor-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  position: relative;
+  transition: all var(--transition-med);
+}
+
+.peek-click-banner {
+  display: none;
+  background: rgba(127, 109, 242, 0.16);
+  border-bottom: 1px solid rgba(127, 109, 242, 0.35);
+  color: #d6cfff;
+  font-size: 11.5px;
+  padding: 5px 14px;
+  text-align: center;
+  cursor: pointer;
+}
+.peek-click-banner:hover {
+  background: rgba(127, 109, 242, 0.28);
+}
+
+.editor-topbar {
+  height: 38px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.editor-path {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  display: flex;
+  gap: 10px;
+}
+
+.editor-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 40px 60px;
+  user-select: text;
+}
+
+.editor-document {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.md-title {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: #f3f4f6;
+  letter-spacing: -0.02em;
+}
+.md-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.md-tag {
+  font-size: 11.5px;
+  color: #b7a9ff;
+  background: rgba(127, 109, 242, 0.14);
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+.md-body h2 {
+  font-size: 17px;
+  margin: 22px 0 8px;
+  color: #eceef2;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 4px;
+}
+.md-body h3 {
+  font-size: 15px;
+  margin: 16px 0 6px;
+  color: #e2e4ea;
+}
+.md-body p {
+  margin: 0 0 12px;
+  color: #cfd2da;
+  line-height: 1.7;
+}
+.md-body ul {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  color: #cfd2da;
+}
+.md-body li {
+  margin-bottom: 5px;
+}
+.md-body blockquote {
+  margin: 12px 0;
+  padding: 8px 14px;
+  border-left: 3px solid var(--accent);
+  background: rgba(127, 109, 242, 0.08);
+  border-radius: 0 6px 6px 0;
+  color: #d4d6de;
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #e9d5ff;
+}
+.md-todo {
+  list-style: none;
+  margin-left: -18px;
+}
+.md-todo input {
+  margin-right: 6px;
+  accent-color: var(--accent);
+}
+
+/* =========================================================
+   [ID 2.4] 3가지 작동 방식 레이아웃 (Overlay / Peek / Split)
+   ========================================================= */
+.board-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.62);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  opacity: 0;
+  transition: opacity var(--transition-med);
+}
+
+.board-shell {
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1f;
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+  z-index: 30;
+  transition: transform var(--transition-med), opacity var(--transition-med);
+}
+
+/* --- Mode 1: 확장 오버레이 (추천안) --- */
+body.mode-overlay .board-backdrop {
+  display: block;
+  pointer-events: none;
+}
+body.mode-overlay.board-open .board-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
+body.mode-overlay .board-shell {
+  position: absolute;
+  inset: 18px 22px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  opacity: 0;
+  transform: scale(0.975) translateY(8px);
+  pointer-events: none;
+}
+body.mode-overlay.board-open .board-shell {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  pointer-events: auto;
+}
+
+/* --- Mode 2: 하단 2/3 팝업 (상단 1/3 노트 피크) --- */
+body.mode-peek.board-open .obs-editor-pane {
+  cursor: pointer;
+}
+body.mode-peek.board-open .peek-click-banner {
+  display: block;
+}
+body.mode-peek.board-open .editor-scroll {
+  padding-top: 14px;
+  padding-bottom: 68vh;
+}
+body.mode-peek .board-shell {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 67%;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border-bottom: none;
+  box-shadow: 0 -16px 50px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(127, 109, 242, 0.25);
+  transform: translateY(104%);
+  opacity: 0;
+  pointer-events: none;
+}
+body.mode-peek.board-open .board-shell {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* --- Mode 3: 3분할 상시 보기 (좌측 탐색기 + 중앙 2D 보드 + 우측 에디터) --- */
+body.mode-split .obs-main {
+  flex-direction: row-reverse;
+}
+body.mode-split .obs-editor-pane {
+  width: 34%;
+  flex: 0 0 34%;
+  border-left: 1px solid var(--border-subtle);
+}
+body.mode-split .editor-scroll {
+  padding: 20px 22px 40px;
+}
+body.mode-split .board-shell {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+body.mode-split:not(.board-open) .board-shell {
+  display: none;
+}
+body.mode-split:not(.board-open) .obs-editor-pane {
+  width: 100%;
+  flex: 1;
+  border-left: none;
+}
+
+/* =========================================================
+   [ID 3.1] 2D 보드 헤더 & 브레드크럼 (드롭 타겟 겸용)
+   ========================================================= */
+.board-header {
+  padding: 10px 14px;
+  background: #202026;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.board-nav-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.crumb-btn {
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all var(--transition-fast);
+}
+.crumb-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-normal);
+}
+.crumb-btn.current {
+  background: var(--accent-soft);
+  color: #fff;
+  font-weight: 600;
+  border-color: rgba(127, 109, 242, 0.35);
+}
+.crumb-btn.drag-over {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--accent-glow);
+  transform: scale(1.04);
+}
+.crumb-sep {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.board-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+  pointer-events: none;
+}
+.search-box input {
+  width: 190px;
+  padding: 5px 24px 5px 25px;
+  background: #16161a;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--transition-fast), width var(--transition-fast);
+}
+.search-box input:focus {
+  border-color: var(--accent);
+  width: 220px;
+}
+.clear-search {
+  position: absolute;
+  right: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.segmented {
+  display: inline-flex;
+  background: #16161a;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 2px;
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.seg-btn.active {
+  background: var(--bg-elevated);
+  color: #fff;
+}
+
+.select-sm {
+  background: #16161a;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  outline: none;
+  cursor: pointer;
+}
+
+.close-btn {
+  font-size: 14px;
+  padding: 4px 8px;
+}
+
+/* =========================================================
+   [ID 3.3] 2D 네이티브 탐색기 캔버스 & 동적 높이 바둑판 그리드
+   ========================================================= */
+.board-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+
+.board-canvas {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.grid-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  flex: 1;
+  min-height: 100%;
+}
+.grid-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.grid-section-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+.grid-section-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* [ID 3.4] 동적 행 높이 그리드 레이아웃 */
+/* -> 1줄로 배치 가능할 때는 불필요하게 카드가 짧아지지 않도록 세로 100%를 채우고, 2줄 이상일 때만 행 분할/스크롤로 전환함 */
+.folder-grid {
+  display: grid;
+  gap: 11px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.folder-grid.cols-1 { grid-template-columns: minmax(0, 1fr); }
+.folder-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.folder-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.folder-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.folder-grid.rows-1 {
+  grid-auto-rows: minmax(260px, 1fr);
+}
+.folder-grid.rows-2 {
+  grid-auto-rows: minmax(290px, 1fr);
+}
+.folder-grid.rows-many {
+  grid-auto-rows: 340px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1100px) {
+  .folder-grid.cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 820px) {
+  .folder-grid.cols-3, .folder-grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* [ID 3.3.1] 네이티브 옵시디언 탐색기 스타일의 폴더 카드 */
+/* -> 별도 앱 같은 큰 카드 대신, 옵시디언 기본 파일 탐색기(.nav-files-container)를 그대로 2D로 배열한 밀도와 시각 언어를 구현 */
+.folder-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+  position: relative;
+}
+.folder-card.is-root-card {
+  background: #1a1a20;
+  border-color: rgba(245, 158, 11, 0.24);
+}
+.folder-card:hover {
+  border-color: var(--border-strong);
+}
+.folder-card.focused-card {
+  border-color: rgba(127, 109, 242, 0.72);
+  box-shadow: 0 0 0 1px rgba(127, 109, 242, 0.45), 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.folder-card.drag-over {
+  border-color: var(--accent);
+  background: #232034;
+  box-shadow: 0 0 0 2px var(--accent-glow), inset 0 0 24px rgba(127, 109, 242, 0.14);
+}
+.folder-card.drag-over::after {
+  content: "여기에 놓아 이동";
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 99px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.folder-card-header {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.folder-card.focused-card .folder-card-header {
+  background: rgba(127, 109, 242, 0.1);
+}
+.folder-card-header:hover {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.folder-card-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.native-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  font-size: 13.5px;
+  flex-shrink: 0;
+}
+.folder-card-name {
+  font-size: 12.8px;
+  font-weight: 600;
+  color: var(--folder-accent, #eef0f4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.root-card-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 1px 6px;
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+.folder-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.folder-count-pill {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 6px;
+  border-radius: 99px;
+}
+.drill-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.drill-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* [ID 3.3.2] 네이티브 옵시디언 탐색기 트리 컨테이너 (.nav-files-container 미러링) */
+/* -> 실제 옵시디언 플러그인 이식 시 테마/Iconize/File Color CSS가 그대로 적용되도록 동일한 계층 구조를 모사함 */
+.nav-files-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-item-self {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12.6px;
+  line-height: 1.4;
+  border: 1px solid transparent;
+  transition: background 90ms ease, color 90ms ease, border-color 90ms ease;
+  position: relative;
+}
+.tree-item-self:hover {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-normal);
+}
+.tree-item-self.nav-file-title {
+  cursor: grab;
+}
+.tree-item-self.nav-folder-title {
+  color: var(--folder-accent, #cfd2dc);
+  font-weight: 500;
+}
+.tree-item-self.nav-folder-title.drag-over {
+  background: var(--accent);
+  color: #fff !important;
+  border-color: var(--accent-hover);
+}
+.tree-item-self.is-selected {
+  background: var(--accent-soft);
+  color: #fff;
+  border-color: rgba(127, 109, 242, 0.45);
+}
+.tree-item-self.is-focused {
+  background: rgba(127, 109, 242, 0.26);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.tree-item-self.is-active {
+  color: #fff;
+  font-weight: 500;
+}
+.tree-item-self.is-active:not(.is-focused):not(.is-selected) {
+  background: rgba(255, 255, 255, 0.05);
+}
+.tree-item-self.dragging {
+  opacity: 0.4;
+}
+
+.collapse-icon {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-faint);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.collapse-icon:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-normal);
+}
+
+.tree-item-inner {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-item-flair {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.empty-folder-msg {
+  margin: auto;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 20px 10px;
+}
+
+.empty-grid-state {
+  grid-column: 1 / -1;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* =========================================================
+   [ID 5.1] Quick Look 슬라이드 미리보기 서랍
+   ========================================================= */
+.quicklook-drawer {
+  width: 0;
+  flex-shrink: 0;
+  background: #17171b;
+  border-left: 0 solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width var(--transition-med), border-left-width var(--transition-fast);
+}
+.quicklook-drawer.open {
+  width: 340px;
+  border-left-width: 1px;
+}
+
+.quicklook-header {
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.quicklook-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.quicklook-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.quicklook-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  user-select: text;
+}
+.quicklook-empty {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+  margin-top: 60px;
+  line-height: 1.7;
+}
+.quicklook-content .md-title {
+  font-size: 18px;
+}
+
+/* =========================================================
+   [ID 4.3] 하단 임시 보관함 (Drag Shelf / Holding Tray)
+   ========================================================= */
+.shelf-bar {
+  min-height: 48px;
+  padding: 7px 14px;
+  background: #151519;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.shelf-bar.drag-over {
+  background: rgba(127, 109, 242, 0.2);
+  border-top-color: var(--accent);
+}
+.shelf-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.shelf-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.shelf-count {
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: #c7befd;
+  padding: 1px 6px;
+  border-radius: 99px;
+}
+.shelf-items {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.shelf-placeholder {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.shelf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(127, 109, 242, 0.35);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: #eef0f4;
+  cursor: grab;
+  white-space: nowrap;
+}
+.shelf-chip button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+}
+.shelf-chip button:hover {
+  color: #fff;
+}
+.shelf-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 다중 선택 플로팅 바 */
+.selection-bar {
+  position: fixed;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #272536;
+  border: 1px solid var(--accent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  padding: 6px 12px;
+  border-radius: 99px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 80;
+  font-size: 12px;
+}
+
+/* 토스트 */
+.toast-container {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+}
+.toast {
+  background: #25252d;
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  padding: 9px 13px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: toastIn 180ms ease-out;
+}
+.toast-undo {
+  border: none;
+  background: var(--accent-soft);
+  color: #c7befd;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.toast-undo:hover {
+  background: var(--accent);
+  color: #fff;
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 도움말 모달 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 120;
+}
+.modal-card {
+  width: min(560px, 92vw);
+  background: #212127;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+.modal-header {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 14.5px;
+}
+.modal-body {
+  padding: 14px 20px 20px;
+}
+.modal-body ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+  color: #d2d4dc;
+}
+.modal-body code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

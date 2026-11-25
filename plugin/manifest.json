@@ -1,0 +1,9 @@
+{
+  "id": "folder-board",
+  "name": "Folder Board",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "2D native folder explorer board with keyboard navigation, Quick Look preview, and drag-and-drop triage.",
+  "author": "Folder Board",
+  "isDesktopOnly": true
+}

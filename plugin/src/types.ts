@@ -1,0 +1,46 @@
+// [ID 6.1] Folder Board 플러그인 공용 타입 및 기본 설정
+// -> 워크스페이스 탭(ItemView) 기반의 열 개수, 정렬, 노트 열기 방식, 영속 폴더 펼침 상태를 정의함.
+
+export type SortMode = "name" | "mtime";
+export type OpenBehavior = "same-tab" | "new-tab";
+
+export interface FolderBoardSettings {
+  gridCols: 2 | 3 | 4;
+  sortBy: SortMode;
+  openBehavior: OpenBehavior;
+  // [ID 6.1.1] 영속적 폴더 펼침 상태 -> 하위 폴더 Drill-down 복귀 및 옵시디언 재시작 후에도 접힘/펼침 상태를 유지함
+  expandedFolders: string[];
+}
+
+export const DEFAULT_SETTINGS: FolderBoardSettings = {
+  gridCols: 3,
+  sortBy: "name",
+  openBehavior: "same-tab",
+  expandedFolders: []
+};
+
+export interface CardTreeItem {
+  type: "folder" | "file";
+  key: string;
+  path: string;
+  name: string;
+  depth: number;
+  expanded?: boolean;
+  childCount?: number;
+  mtime?: number;
+}
+
+export interface BoardCardModel {
+  isRootCard: boolean;
+  folderPath: string;
+  title: string;
+  totalCount: number;
+  items: CardTreeItem[];
+}
+
+export interface MoveUndoEntry {
+  moves: Array<{
+    fromPath: string;
+    toPath: string;
+  }>;
+}
