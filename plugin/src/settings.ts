@@ -1,8 +1,8 @@
 // [ID 6.4] Folder Board 플러그인 설정 탭
-// -> 열 개수, 정렬 기준, 노트 열기 방식, 영속 폴더 펼침 초기화를 제공함.
+// -> 레이아웃(2/3/4열 그리드 및 가로 스크롤 세로 펼침), 정렬, 노트 열기 방식, 영속 펼침 초기화를 제공함.
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FolderBoardPlugin from "./main";
-import type { OpenBehavior, SortMode } from "./types";
+import type { LayoutColumns, OpenBehavior, SortMode } from "./types";
 
 export class FolderBoardSettingTab extends PluginSettingTab {
   private plugin: FolderBoardPlugin;
@@ -17,15 +17,16 @@ export class FolderBoardSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("기본 열 개수")
+      .setName("기본 레이아웃")
       .addDropdown((dd) =>
         dd
-          .addOption("2", "2열")
-          .addOption("3", "3열")
-          .addOption("4", "4열")
+          .addOption("2", "2열 그리드")
+          .addOption("3", "3열 그리드")
+          .addOption("4", "4열 그리드")
+          .addOption("scroll", "세로 펼침 (가로 스크롤)")
           .setValue(String(this.plugin.settings.gridCols))
           .onChange(async (value) => {
-            this.plugin.settings.gridCols = Number(value) as 2 | 3 | 4;
+            this.plugin.settings.gridCols = (value === "scroll" ? "scroll" : Number(value)) as LayoutColumns;
             await this.plugin.saveSettings();
             this.plugin.refreshOpenViews();
           })
