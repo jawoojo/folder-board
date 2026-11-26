@@ -66,11 +66,13 @@ export class FolderBoardView extends ItemView {
   private quickLookPath: string | null = null;
   private renderedCards: BoardCardModel[] = [];
 
-  // [ID 6.5.11] Cmd + 방향키 들고 이동(Carry Mode) 상태
-  // -> Cmd 키를 누른 채 방향키로 대상 폴더를 지정하고 Cmd 키를 떼는 순간 일괄 이동을 실행함.
+  // [ID 6.5.11] Option(Alt) + 방향키 들고 이동(Carry Mode) & Cmd+X/V 잘라내기 상태
+  // -> Option(Alt) 키를 누른 채 방향키로 대상 폴더를 지정하고 키를 떼면 이동하며,
+  // -> Cmd+X로 잘라낸 항목은 하위/상위 폴더 이동 후 Cmd+V로 붙여넣기 이동할 수 있음.
   private carryPaths: string[] = [];
   private carryCardIndex = 0;
   private carryTargetFolderPath: string | null = null;
+  private cutPaths: string[] = [];
 
   private activeDragPaths: string[] = [];
   private currentDropEl: HTMLElement | null = null;
@@ -665,6 +667,7 @@ export class FolderBoardView extends ItemView {
     const cards = this.buildBoardCards();
     this.renderBreadcrumb();
     this.renderGrid(cards);
+    this.syncFocusAndSelectionDOM();
     this.updateToolbarStates();
     (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
   }
@@ -676,14 +679,18 @@ export class FolderBoardView extends ItemView {
     const cardEls = this.gridEl.querySelectorAll<HTMLElement>(".fb-card");
     const isCarrying = this.carryPaths.length > 0;
 
+    const cutSet = new Set(this.cutPaths);
+
     cardEls.forEach((cardEl) => {
       const idx = Number(cardEl.dataset.cardIndex);
       const cardPath = cardEl.dataset.dropFolder || "";
       const isFocusedCard = !isCarrying && idx === this.focusedCardIndex;
       const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
       const isCarryCard = isCarrying && idx === this.carryCardIndex && this.carryTargetFolderPath === cardPath;
+      const isCutCard = Boolean(cardPath && cutSet.has(cardPath));
       cardEl.toggleClass("is-focused-card", isFocusedCard);
       cardEl.toggleClass("is-carry-target", isCarryCard);
+      cardEl.toggleClass("is-cut", isCutCard);
       const headerEl = cardEl.querySelector<HTMLElement>(".fb-card-header");
       if (headerEl) headerEl.toggleClass("is-header-focused", isHeaderFocused);
     });
@@ -691,12 +698,13 @@ export class FolderBoardView extends ItemView {
     const rowEls = this.gridEl.querySelectorAll<HTMLElement>(".fb-row");
     rowEls.forEach((rowEl) => {
       const key = rowEl.dataset.itemKey || "";
-      const filePath = rowEl.dataset.dragPath || "";
+      const itemPath = rowEl.dataset.dragPath || "";
       const dropPath = rowEl.dataset.dropFolder;
       const cardIdx = Number(rowEl.dataset.cardIndex);
 
       const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && key === this.focusedItemKey;
-      const isSelected = Boolean(filePath && this.selectedPaths.has(filePath));
+      const isSelected = Boolean(itemPath && this.selectedPaths.has(itemPath));
+      const isCut = Boolean(itemPath && cutSet.has(itemPath));
       const isCarryFolder =
         isCarrying &&
         dropPath !== undefined &&
@@ -705,6 +713,7 @@ export class FolderBoardView extends ItemView {
 
       rowEl.toggleClass("is-focused", isFocused);
       rowEl.toggleClass("is-selected", isSelected);
+      rowEl.toggleClass("is-cut", isCut);
       rowEl.toggleClass("is-carry-target", isCarryFolder);
     });
 
@@ -1048,7 +1057,7 @@ export class FolderBoardView extends ItemView {
 
   private renderSelectionBar(): void {
     const count = this.selectedPaths.size;
-    const hide = count < 2 || this.carryPaths.length > 0;
+    const hide = count < 2 || this.carryPaths.length > 0 || this.cutPaths.length > 0;
     this.selectionBarEl.toggleClass("is-hidden", hide);
     if (!hide) {
       this.selectionCountEl.setText(`${count}개 선택됨`);
@@ -1056,13 +1065,22 @@ export class FolderBoardView extends ItemView {
   }
 
   private renderCarryPill(): void {
-    if (this.carryPaths.length === 0 || this.carryTargetFolderPath === null) {
-      this.carryPillEl.addClass("is-hidden");
+    if (this.carryPaths.length > 0 && this.carryTargetFolderPath !== null) {
+      const targetName = this.carryTargetFolderPath || this.app.vault.getName();
+      this.carryPillEl.setText(`${this.carryPaths.length}개 → ${targetName}`);
+      this.carryPillEl.removeClass("is-hidden");
       return;
     }
-    const targetName = this.carryTargetFolderPath || this.app.vault.getName();
-    this.carryPillEl.setText(`${this.carryPaths.length}개 → ${targetName}`);
-    this.carryPillEl.removeClass("is-hidden");
+
+    // 삭제된 잘라내기 항목 정리
+    this.cutPaths = this.cutPaths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null);
+    if (this.cutPaths.length > 0) {
+      this.carryPillEl.setText(`${this.cutPaths.length}개 잘라냄 · ⌘V 붙여넣기`);
+      this.carryPillEl.removeClass("is-hidden");
+      return;
+    }
+
+    this.carryPillEl.addClass("is-hidden");
   }
 
   private async updateQuickLook(targetFileOverride?: TFile | null): Promise<void> {
@@ -1755,7 +1773,7 @@ export class FolderBoardView extends ItemView {
   }
 
   // =========================================================
-  // 키보드 2D 탐색 · Shift 다중 선택 · Cmd 들고 이동 핸들러
+  // 키보드 2D 탐색 · Shift 다중 선택 · Option 들고 이동 · Cmd 점프 & X/V
   // =========================================================
   private isViewActive(): boolean {
     if (this.isSubModalOpen) return false;
@@ -1763,9 +1781,57 @@ export class FolderBoardView extends ItemView {
     return this.app.workspace.getActiveViewOfType(FolderBoardView) === this;
   }
 
+  // [ID 6.5.24] 2D 그리드 / 세로 모드에서 화면상 동일 열의 바로 위·아래 행 카드 탐색
+  // -> 대각선(인접 열) 카드로 엉뚱하게 튀지 않도록 동일 열(offsetLeft 오차 24px 이내)에 위치한 카드만 매칭함.
+  private findVerticalNeighborCard(cardIdx: number, direction: "up" | "down"): number {
+    if (this.plugin.settings.verticalEdgeBehavior !== "adaptive") return -1;
+    if (this.plugin.settings.gridCols === "scroll") return -1;
+
+    const cardEls = Array.from(this.gridEl.querySelectorAll<HTMLElement>(".fb-card"));
+    const curEl = cardEls[cardIdx];
+    if (!curEl) return -1;
+
+    const curTop = curEl.offsetTop;
+    const curLeft = curEl.offsetLeft;
+    const threshold = 10;
+    const sameColTolerance = 24;
+
+    let bestIdx = -1;
+    let bestRowDist = Infinity;
+
+    cardEls.forEach((el, idx) => {
+      if (idx === cardIdx) return;
+      const dy = el.offsetTop - curTop;
+      if (direction === "down" && dy <= threshold) return;
+      if (direction === "up" && dy >= -threshold) return;
+
+      const colDist = Math.abs(el.offsetLeft - curLeft);
+      if (colDist > sameColTolerance) return;
+
+      const rowDist = Math.abs(dy);
+      if (rowDist < bestRowDist) {
+        bestRowDist = rowDist;
+        bestIdx = idx;
+      }
+    });
+
+    return bestIdx;
+  }
+
+  private focusCardHeader(cardIdx: number): void {
+    this.focusedCardIndex = cardIdx;
+    this.focusedItemKey = CARD_HEADER_KEY;
+    this.selectedPaths.clear();
+    this.selectionAnchorIndex = null;
+    this.syncFocusAndSelectionDOM();
+    this.renderSelectionBar();
+    this.scrollFocusedIntoView();
+  }
+
   private handleKeyup(e: KeyboardEvent): void {
     if (this.carryPaths.length === 0) return;
-    if (e.key === "Meta" || e.key === "Control") {
+    // [ID 6.5.25] Option(Alt) 키를 떼는 순간 들고 있던 파일/폴더를 대상 폴더로 확정 이동
+    if (e.key === "Alt") {
       this.commitCarryMode();
     }
   }
@@ -1785,6 +1851,14 @@ export class FolderBoardView extends ItemView {
         this.cancelCarryMode();
         return;
       }
+      if (this.cutPaths.length > 0) {
+        e.preventDefault();
+        this.cutPaths = [];
+        this.syncFocusAndSelectionDOM();
+        this.renderCarryPill();
+        this.renderSelectionBar();
+        return;
+      }
       if (this.selectedPaths.size > 0) {
         e.preventDefault();
         this.selectedPaths.clear();
@@ -1801,11 +1875,40 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
-    if (meta && !e.shiftKey && e.key.toLowerCase() === "z") {
+    // Cmd/Ctrl + Z: 마지막 이동 되돌리기
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
       if (this.undoStack.length > 0) {
         e.preventDefault();
         e.stopPropagation();
         void this.undoLastMove();
+      }
+      return;
+    }
+
+    // [ID 6.5.26] Cmd/Ctrl + X / V: 업계 표준 잘라내기 → 다른 폴더 이동 후 붙여넣기 이동
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "x") {
+      const sources = this.resolveCarrySourcePaths();
+      if (sources.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cutPaths = sources;
+        this.selectedPaths.clear();
+        this.selectionAnchorIndex = null;
+        this.syncFocusAndSelectionDOM();
+        this.renderSelectionBar();
+        this.renderCarryPill();
+      }
+      return;
+    }
+
+    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v") {
+      if (this.cutPaths.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        const paths = [...this.cutPaths];
+        this.cutPaths = [];
+        this.renderCarryPill();
+        void this.moveFiles(paths, this.getFocusedTargetFolderPath());
       }
       return;
     }
@@ -1820,8 +1923,13 @@ export class FolderBoardView extends ItemView {
 
     if (this.renderedCards.length === 0) return;
 
-    // [ID 6.5.14] Cmd/Ctrl + 방향키: 선택된 항목(또는 포커스 파일) 들고 원하는 폴더로 이동 → 키 떼면 드롭
-    if (meta && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    // [ID 6.5.14] Option(Alt) + 방향키: 업계 표준 항목 들고 이동 → Option(Alt) 키를 떼면 드롭
+    // -> Cmd+Opt+Left/Right(옵시디언 기본 뒤로가기/앞으로가기)는 meta === true이므로 간섭하지 않음.
+    if (
+      e.altKey &&
+      !meta &&
+      (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")
+    ) {
       e.preventDefault();
       e.stopPropagation();
       const dirMap = {
@@ -1834,8 +1942,42 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
+    // [ID 6.5.27] Cmd/Ctrl + 방향키: 업계 표준 빠른 점프 (↑/↓ 맨 위·맨 아래 항목, ←/→ 첫·끝 카드)
+    if (meta && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault();
+      e.stopPropagation();
+      const { card, itemIndex } = this.findFocusedCardAndIndex();
+      if (!card || card.items.length === 0) return;
+      const targetIdx = e.key === "ArrowUp" ? 0 : card.items.length - 1;
+
+      if (e.shiftKey) {
+        const anchor = this.selectionAnchorIndex ?? (itemIndex >= 0 ? itemIndex : 0);
+        this.selectionAnchorIndex = anchor;
+        this.selectRangeInCard(this.focusedCardIndex, anchor, targetIdx);
+      } else {
+        this.focusCardItem(this.focusedCardIndex, targetIdx, {
+          clearSelection: true,
+          updatePreview: true
+        });
+      }
+      return;
+    }
+
+    if (meta && !e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      e.stopPropagation();
+      const nextIdx = e.key === "ArrowLeft" ? 0 : this.renderedCards.length - 1;
+      const targetCard = this.renderedCards[nextIdx];
+      const firstFileIdx = targetCard.items.findIndex((it) => it.type === "file");
+      this.focusCardItem(nextIdx, firstFileIdx >= 0 ? firstFileIdx : 0, {
+        clearSelection: true,
+        updatePreview: true
+      });
+      return;
+    }
+
     // Shift + 위/아래 방향키: 범위 다중 선택 (미리보기는 변경하지 않음)
-    if (e.shiftKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    if (e.shiftKey && !meta && !e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       e.stopPropagation();
       const { card, itemIndex } = this.findFocusedCardAndIndex();
@@ -1852,7 +1994,7 @@ export class FolderBoardView extends ItemView {
     }
 
     // 좌/우: 폴더 카드 간 이동 (예비 포커싱)
-    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    if (!meta && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
       e.stopPropagation();
       const delta = e.key === "ArrowRight" ? 1 : -1;
@@ -1866,8 +2008,8 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
-    // [ID 6.5.18] 위/아래 순환 이동 (첫 항목 ↑ → 폴더 헤더 포커스 → 다시 ↑ → 최하단 항목 래핑)
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    // [ID 6.5.18] 위/아래 이동 (모드 적응형: 가로 모드=내부 순환, 세로/2D 그리드=아래·위 행 카드 연결)
+    if (!meta && !e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       e.stopPropagation();
       const { card, itemIndex } = this.findFocusedCardAndIndex();
@@ -1878,39 +2020,54 @@ export class FolderBoardView extends ItemView {
       const count = card.items.length;
 
       if (count === 0) {
-        if (hasHeaderStop) {
-          this.focusedItemKey = CARD_HEADER_KEY;
-          this.selectedPaths.clear();
-          this.selectionAnchorIndex = null;
-          this.syncFocusAndSelectionDOM();
-          this.renderSelectionBar();
-          this.scrollFocusedIntoView();
+        const neighborIdx = this.findVerticalNeighborCard(
+          this.focusedCardIndex,
+          e.key === "ArrowUp" ? "up" : "down"
+        );
+        if (neighborIdx >= 0) {
+          const neighbor = this.renderedCards[neighborIdx];
+          if (e.key === "ArrowUp") {
+            if (neighbor.items.length > 0) {
+              this.focusCardItem(neighborIdx, neighbor.items.length - 1);
+            } else if (!neighbor.isRootCard) {
+              this.focusCardHeader(neighborIdx);
+            }
+          } else {
+            if (!neighbor.isRootCard) {
+              this.focusCardHeader(neighborIdx);
+            } else {
+              this.focusCardItem(neighborIdx, 0);
+            }
+          }
+          return;
         }
+        if (hasHeaderStop) this.focusCardHeader(this.focusedCardIndex);
         return;
       }
 
       if (e.key === "ArrowUp") {
-        if (onHeader) {
-          // 폴더 헤더에서 ↑ -> 최하단 노트/항목으로 순환
-          this.focusCardItem(this.focusedCardIndex, count - 1, {
-            clearSelection: true,
-            updatePreview: true
-          });
-        } else if (itemIndex <= 0) {
-          if (hasHeaderStop) {
-            // 첫 번째 항목에서 ↑ -> 카드 폴더 헤더 포커스 (Enter로 진입 가능)
-            this.focusedItemKey = CARD_HEADER_KEY;
-            this.selectedPaths.clear();
-            this.selectionAnchorIndex = null;
-            this.syncFocusAndSelectionDOM();
-            this.renderSelectionBar();
-            this.scrollFocusedIntoView();
+        if (onHeader || (!hasHeaderStop && itemIndex <= 0)) {
+          // 2D 그리드/세로 모드에서 위 행 카드가 있으면 그 카드의 최하단으로 연결, 없으면 현재 카드 최하단 순환
+          const aboveIdx = this.findVerticalNeighborCard(this.focusedCardIndex, "up");
+          if (aboveIdx >= 0) {
+            const aboveCard = this.renderedCards[aboveIdx];
+            if (aboveCard.items.length > 0) {
+              this.focusCardItem(aboveIdx, aboveCard.items.length - 1, {
+                clearSelection: true,
+                updatePreview: true
+              });
+            } else if (!aboveCard.isRootCard) {
+              this.focusCardHeader(aboveIdx);
+            }
           } else {
             this.focusCardItem(this.focusedCardIndex, count - 1, {
               clearSelection: true,
               updatePreview: true
             });
           }
+        } else if (itemIndex <= 0) {
+          // 첫 번째 항목에서 ↑ -> 카드 폴더 헤더 포커스 (Enter로 진입 가능)
+          this.focusCardHeader(this.focusedCardIndex);
         } else {
           this.focusCardItem(this.focusedCardIndex, itemIndex - 1, {
             clearSelection: true,
@@ -1919,24 +2076,26 @@ export class FolderBoardView extends ItemView {
         }
       } else {
         // ArrowDown
-        if (onHeader) {
-          this.focusCardItem(this.focusedCardIndex, 0, {
-            clearSelection: true,
-            updatePreview: true
-          });
-        } else if (itemIndex === -1) {
+        if (onHeader || itemIndex === -1) {
           this.focusCardItem(this.focusedCardIndex, 0, {
             clearSelection: true,
             updatePreview: true
           });
         } else if (itemIndex >= count - 1) {
-          if (hasHeaderStop) {
-            this.focusedItemKey = CARD_HEADER_KEY;
-            this.selectedPaths.clear();
-            this.selectionAnchorIndex = null;
-            this.syncFocusAndSelectionDOM();
-            this.renderSelectionBar();
-            this.scrollFocusedIntoView();
+          // 2D 그리드/세로 모드에서 아래 행 카드가 있으면 그 카드 헤더로 자연스럽게 이동, 없으면 현재 카드 내부 순환
+          const belowIdx = this.findVerticalNeighborCard(this.focusedCardIndex, "down");
+          if (belowIdx >= 0) {
+            const belowCard = this.renderedCards[belowIdx];
+            if (!belowCard.isRootCard) {
+              this.focusCardHeader(belowIdx);
+            } else {
+              this.focusCardItem(belowIdx, 0, {
+                clearSelection: true,
+                updatePreview: true
+              });
+            }
+          } else if (hasHeaderStop) {
+            this.focusCardHeader(this.focusedCardIndex);
           } else {
             this.focusCardItem(this.focusedCardIndex, 0, {
               clearSelection: true,

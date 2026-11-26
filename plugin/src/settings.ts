@@ -1,8 +1,8 @@
 // [ID 6.4] Folder Board 플러그인 설정 탭
-// -> 2/3/4열 고정, 세로 자동 열(auto), 세로 펼침 가로 스크롤(scroll), 정렬, 노트 열기 방식을 관리함.
+// -> 레이아웃, 정렬, 노트 열기 방식, 세로 경계(↑/↓) 카드 이동 정책, 영속 폴더 펼침 초기화를 관리함.
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FolderBoardPlugin from "./main";
-import type { LayoutColumns, OpenBehavior, SortMode } from "./types";
+import type { LayoutColumns, OpenBehavior, SortMode, VerticalEdgeBehavior } from "./types";
 
 export class FolderBoardSettingTab extends PluginSettingTab {
   private plugin: FolderBoardPlugin;
@@ -58,6 +58,20 @@ export class FolderBoardSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.openBehavior)
           .onChange(async (value) => {
             this.plugin.settings.openBehavior = value as OpenBehavior;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("카드 상하 끝에서 ↑/↓ 동작")
+      .setDesc("적응형: 가로 모드는 카드 내부 순환, 2D 그리드·세로 모드는 위/아래 행 폴더 카드로 연결")
+      .addDropdown((dd) =>
+        dd
+          .addOption("adaptive", "모드 적응형 (추천)")
+          .addOption("loop", "항상 카드 내부 순환")
+          .setValue(this.plugin.settings.verticalEdgeBehavior)
+          .onChange(async (value) => {
+            this.plugin.settings.verticalEdgeBehavior = value as VerticalEdgeBehavior;
             await this.plugin.saveSettings();
           })
       );

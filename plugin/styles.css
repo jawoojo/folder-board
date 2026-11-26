@@ -412,6 +412,12 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 50%, transparent);
 }
 
+/* [ID 6.7.4] Cmd+X 잘라내기 대기 항목 시각적 표시 */
+.fb-row.is-cut,
+.fb-card.is-cut {
+  opacity: 0.45;
+}
+
 .fb-row .collapse-icon {
   position: static;
   margin: 0;
