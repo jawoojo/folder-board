@@ -208,13 +208,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.quickLookOpen = false;
     this.quickLookPath = null;
     this.renderedCards = [];
-    // [ID 6.5.11] Option(Alt) + 방향키 들고 이동(Carry Mode) & Cmd+X/V 잘라내기 상태
-    // -> Option(Alt) 키를 누른 채 방향키로 대상 폴더를 지정하고 키를 떼면 이동하며,
-    // -> Cmd+X로 잘라낸 항목은 하위/상위 폴더 이동 후 Cmd+V로 붙여넣기 이동할 수 있음.
+    // [ID 6.5.11] Option(Alt)+방향키 들고 이동 & Cmd+C/X/V 복사·잘라내기·붙여넣기 클립보드 상태
+    // -> cut은 이동(원본 반투명 표시), copy는 재귀 복제(여러 폴더에 반복 붙여넣기 가능)로 동작함.
     this.carryPaths = [];
     this.carryCardIndex = 0;
     this.carryTargetFolderPath = null;
-    this.cutPaths = [];
+    this.clipboardMode = null;
+    this.clipboardPaths = [];
     this.activeDragPaths = [];
     this.draggingCardPath = null;
     this.reorderTargetEl = null;
@@ -227,6 +227,9 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.markdownComponent = null;
     this.vaultRefs = [];
     this.resizeObserver = null;
+    // [ID 6.5.32] 뷰 전용 Obsidian Scope -> 옵시디언 글로벌 Cmd+F/A/D 단축키보다 우선해 보드 활성 시 안전하게 가로챔
+    this.viewScope = null;
+    this.scopeActive = false;
     this.refreshTimer = null;
     this.plugin = plugin;
     this.boundKeydown = this.handleKeydown.bind(this);
@@ -286,53 +289,109 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   refresh() {
     if (this.shellEl) this.renderAll();
   }
-  // [ID 6.5.28] 좌측 네이티브 파일 탐색기에서 → 로 복귀 시 첫 번째 카드 포커싱
-  focusFromLeftSidebar() {
-    this.shellEl?.focus();
-    if (this.renderedCards.length === 0) return;
-    const firstCard = this.renderedCards[0];
-    const firstFileIdx = firstCard.items.findIndex((it) => it.type === "file");
-    this.focusCardItem(0, firstFileIdx >= 0 ? firstFileIdx : 0, {
-      clearSelection: true,
-      updatePreview: true
-    });
+  isInputFocused() {
+    return Boolean(
+      document.activeElement instanceof HTMLElement && document.activeElement.closest("input, textarea, select")
+    );
   }
-  // [ID 6.5.29] 가장 왼쪽 카드에서 ← 누를 때 좌측 네이티브 파일 탐색기로 포커스 이동
-  focusLeftFileExplorer() {
-    const leftSplit = this.app.workspace.leftSplit;
-    if (leftSplit?.collapsed) return false;
-    const leaves = this.app.workspace.getLeavesOfType("file-explorer");
-    if (!leaves || leaves.length === 0) return false;
-    const explorerLeaf = leaves[0];
-    this.app.workspace.revealLeaf(explorerLeaf);
-    this.app.workspace.setActiveLeaf(explorerLeaf, { focus: true });
-    const view = explorerLeaf.view;
-    if (view?.tree && !view.tree.focusedItem && view.tree.setFocusedItem && view.fileItems) {
-      const activeFile = this.app.workspace.getActiveFile();
-      const targetItem = activeFile && view.fileItems[activeFile.path] || Object.values(view.fileItems).find((it) => Boolean(it));
-      if (targetItem) {
-        view.tree.setFocusedItem(targetItem, true);
+  hasSelectedText() {
+    const sel = window.getSelection();
+    return Boolean(sel && sel.toString().length > 0);
+  }
+  setupViewScope() {
+    const scope = new import_obsidian3.Scope(this.app.scope);
+    const registerModAndCtrl = (keys, handler) => {
+      for (const key of keys) {
+        scope.register(["Mod"], key, handler);
+        scope.register(["Ctrl"], key, handler);
       }
+    };
+    registerModAndCtrl(["f", "\u3139"], (evt) => {
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      this.focusSearchBox();
+      return false;
+    });
+    registerModAndCtrl(["a", "\u3141"], (evt) => {
+      if (this.isInputFocused()) return true;
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      this.selectAllInFocusedCard();
+      return false;
+    });
+    registerModAndCtrl(["d", "\u3147"], (evt) => {
+      if (this.isInputFocused()) return true;
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      void this.duplicateFocusedItem();
+      return false;
+    });
+    registerModAndCtrl(["c", "\u314A"], (evt) => {
+      if (this.isInputFocused() || this.hasSelectedText()) return true;
+      if (this.copySelectedOrFocused()) {
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        return false;
+      }
+      return true;
+    });
+    registerModAndCtrl(["x", "\u314C"], (evt) => {
+      if (this.isInputFocused() || this.hasSelectedText()) return true;
+      if (this.cutSelectedOrFocused()) {
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        return false;
+      }
+      return true;
+    });
+    registerModAndCtrl(["v", "\u314D"], (evt) => {
+      if (this.isInputFocused()) return true;
+      if (this.clipboardPaths.length > 0 && this.clipboardMode) {
+        evt.preventDefault();
+        evt.stopImmediatePropagation();
+        void this.pasteClipboardToFocusedFolder();
+        return false;
+      }
+      return true;
+    });
+    this.viewScope = scope;
+  }
+  syncScopeState() {
+    const shouldBeActive = !this.isSubModalOpen && !document.querySelector(".modal-container") && this.app.workspace.getActiveViewOfType(_FolderBoardView) === this;
+    if (shouldBeActive && !this.scopeActive && this.viewScope) {
+      this.app.keymap.pushScope(this.viewScope);
+      this.scopeActive = true;
+    } else if (!shouldBeActive && this.scopeActive && this.viewScope) {
+      this.app.keymap.popScope(this.viewScope);
+      this.scopeActive = false;
     }
-    const focusTarget = view?.containerEl?.querySelector(".nav-files-container") || view?.containerEl;
-    focusTarget?.focus();
-    return true;
+  }
+  focusSearchBox() {
+    this.searchInputEl?.focus();
+    this.searchInputEl?.select();
   }
   async onOpen() {
     this.contentEl.empty();
     this.contentEl.addClass("fb-view-content");
     this.buildShell();
+    this.setupViewScope();
     this.bindVaultEvents();
     this.bindInteractionEvents();
     this.renderAll();
     if (!this.findFocusedCardAndIndex().item && this.renderedCards[0]?.items[0]) {
       this.focusCardItem(0, 0);
     }
+    this.syncScopeState();
     requestAnimationFrame(() => this.shellEl?.focus());
   }
   async onClose() {
+    if (this.scopeActive && this.viewScope) {
+      this.app.keymap.popScope(this.viewScope);
+      this.scopeActive = false;
+    }
+    this.viewScope = null;
     this.unbindVaultEvents();
-    document.removeEventListener("keydown", this.boundKeydown, true);
+    window.removeEventListener("keydown", this.boundKeydown, true);
     document.removeEventListener("keyup", this.boundKeyup, true);
     window.removeEventListener("blur", this.boundWindowBlur);
     this.contentEl.removeEventListener("dragover", this.boundDragOver);
@@ -550,6 +609,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     };
     this.vaultRefs.push(this.app.vault.on("create", scheduleRefresh));
     this.vaultRefs.push(this.app.vault.on("delete", scheduleRefresh));
+    this.vaultRefs.push(this.app.workspace.on("active-leaf-change", () => this.syncScopeState()));
     this.vaultRefs.push(
       this.app.vault.on("rename", (file, oldPath) => {
         if (file instanceof import_obsidian3.TFolder && this.plugin.isFolderExpanded(oldPath)) {
@@ -563,11 +623,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     );
   }
   unbindVaultEvents() {
-    this.vaultRefs.forEach((ref) => this.app.vault.offref(ref));
+    this.vaultRefs.forEach((ref) => {
+      this.app.vault.offref(ref);
+      this.app.workspace.offref(ref);
+    });
     this.vaultRefs = [];
   }
   bindInteractionEvents() {
-    document.addEventListener("keydown", this.boundKeydown, true);
+    window.addEventListener("keydown", this.boundKeydown, true);
     document.addEventListener("keyup", this.boundKeyup, true);
     window.addEventListener("blur", this.boundWindowBlur);
     this.contentEl.addEventListener("dragover", this.boundDragOver);
@@ -751,7 +814,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   syncFocusAndSelectionDOM() {
     const cardEls = this.gridEl.querySelectorAll(".fb-card");
     const isCarrying = this.carryPaths.length > 0;
-    const cutSet = new Set(this.cutPaths);
+    const cutSet = new Set(this.clipboardMode === "cut" ? this.clipboardPaths : []);
     cardEls.forEach((cardEl) => {
       const idx = Number(cardEl.dataset.cardIndex);
       const cardPath = cardEl.dataset.dropFolder || "";
@@ -1066,7 +1129,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   }
   renderSelectionBar() {
     const count = this.selectedPaths.size;
-    const hide = count < 2 || this.carryPaths.length > 0 || this.cutPaths.length > 0;
+    const hide = count < 2 || this.carryPaths.length > 0 || this.clipboardPaths.length > 0;
     this.selectionBarEl.toggleClass("is-hidden", hide);
     if (!hide) {
       this.selectionCountEl.setText(`${count}\uAC1C \uC120\uD0DD\uB428`);
@@ -1079,12 +1142,16 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.carryPillEl.removeClass("is-hidden");
       return;
     }
-    this.cutPaths = this.cutPaths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null);
-    if (this.cutPaths.length > 0) {
-      this.carryPillEl.setText(`${this.cutPaths.length}\uAC1C \uC798\uB77C\uB0C4 \xB7 \u2318V \uBD99\uC5EC\uB123\uAE30`);
+    this.clipboardPaths = this.clipboardPaths.filter(
+      (p) => this.app.vault.getAbstractFileByPath(p) !== null
+    );
+    if (this.clipboardPaths.length > 0 && this.clipboardMode) {
+      const label = this.clipboardMode === "copy" ? `${this.clipboardPaths.length}\uAC1C \uBCF5\uC0AC\uB428 \xB7 \u2318V \uBD99\uC5EC\uB123\uAE30` : `${this.clipboardPaths.length}\uAC1C \uC798\uB77C\uB0C4 \xB7 \u2318V \uC774\uB3D9`;
+      this.carryPillEl.setText(label);
       this.carryPillEl.removeClass("is-hidden");
       return;
     }
+    this.clipboardMode = null;
     this.carryPillEl.addClass("is-hidden");
   }
   async updateQuickLook(targetFileOverride) {
@@ -1406,6 +1473,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const targetFolderPath = explicitFolderPath !== void 0 ? normalizeFolderStr(explicitFolderPath) : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
+    this.syncScopeState();
     const modal = new NamePromptModal(this.app, {
       title: "\uC0C8 \uB178\uD2B8",
       placeholder: "\uB178\uD2B8 \uC81C\uBAA9",
@@ -1436,6 +1504,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     modal.onClose = () => {
       origOnClose();
       this.isSubModalOpen = false;
+      this.syncScopeState();
       requestAnimationFrame(() => this.shellEl?.focus());
     };
     modal.open();
@@ -1444,6 +1513,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const targetFolderPath = explicitFolderPath !== void 0 ? normalizeFolderStr(explicitFolderPath) : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
+    this.syncScopeState();
     const modal = new NamePromptModal(this.app, {
       title: "\uC0C8 \uD3F4\uB354",
       placeholder: "\uD3F4\uB354 \uC774\uB984",
@@ -1473,6 +1543,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     modal.onClose = () => {
       origOnClose();
       this.isSubModalOpen = false;
+      this.syncScopeState();
       requestAnimationFrame(() => this.shellEl?.focus());
     };
     modal.open();
@@ -1481,6 +1552,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const isMd = target instanceof import_obsidian3.TFile && target.extension === "md";
     const initial = isMd ? target.basename : target.name;
     this.isSubModalOpen = true;
+    this.syncScopeState();
     const modal = new NamePromptModal(this.app, {
       title: "\uC774\uB984 \uBC14\uAFB8\uAE30",
       placeholder: "\uC0C8 \uC774\uB984",
@@ -1507,9 +1579,213 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     modal.onClose = () => {
       origOnClose();
       this.isSubModalOpen = false;
+      this.syncScopeState();
       requestAnimationFrame(() => this.shellEl?.focus());
     };
     modal.open();
+  }
+  // =========================================================
+  // [ID 6.5.33] 빠른 생산성 단축키 액션 (이름 변경, 삭제, 전체 선택, 복제, 일괄 접기/펼치기, 숫자 점프)
+  // =========================================================
+  getFocusedAbstractTarget() {
+    const curCard = this.renderedCards[this.focusedCardIndex];
+    if (this.focusedItemKey === CARD_HEADER_KEY && curCard && !curCard.isRootCard) {
+      return getFolderByPath(this.app, curCard.folderPath);
+    }
+    if (this.focusedItemKey?.startsWith("folder:")) {
+      return getFolderByPath(this.app, this.focusedItemKey.slice(7));
+    }
+    if (this.focusedItemKey?.startsWith("file:")) {
+      return getFileByPath(this.app, this.focusedItemKey.slice(5));
+    }
+    return null;
+  }
+  renameFocusedItem() {
+    const target = this.getFocusedAbstractTarget();
+    if (!target || target instanceof import_obsidian3.TFolder && target.isRoot()) return;
+    this.promptRename(target);
+  }
+  async deleteFocusedOrSelected() {
+    const paths = this.resolveCarrySourcePaths();
+    if (paths.length === 0) return;
+    let deleted = 0;
+    for (const p of paths) {
+      const target = this.app.vault.getAbstractFileByPath(p);
+      if (!target || target instanceof import_obsidian3.TFolder && target.isRoot()) continue;
+      try {
+        await this.app.vault.trash(target, true);
+        deleted++;
+      } catch {
+      }
+    }
+    if (deleted > 0) {
+      this.selectedPaths.clear();
+      this.selectionAnchorIndex = null;
+      new import_obsidian3.Notice(`${deleted}\uAC1C \uD56D\uBAA9\uC744 \uD734\uC9C0\uD1B5\uC73C\uB85C \uC774\uB3D9\uD588\uC2B5\uB2C8\uB2E4.`);
+      this.renderAll();
+    }
+  }
+  selectAllInFocusedCard() {
+    const card = this.renderedCards[this.focusedCardIndex];
+    if (!card || card.items.length === 0) return;
+    this.selectedPaths.clear();
+    for (const it of card.items) {
+      this.selectedPaths.add(it.path);
+    }
+    this.selectionAnchorIndex = 0;
+    this.syncFocusAndSelectionDOM();
+    this.renderSelectionBar();
+  }
+  // [ID 6.5.35] 옵시디언 구버전 호환 파일·폴더 재귀 복제 유틸
+  // -> vault.copy()는 Obsidian 1.8.7 이상에서만 존재하므로 readBinary/createBinary + 재귀 폴더 생성으로 전 버전 호환성을 보장함.
+  buildUniqueCopyPath(destFolderPath, item, forceSuffix) {
+    const isFile = item instanceof import_obsidian3.TFile;
+    const base = isFile ? item.basename : item.name;
+    const ext = isFile && item.extension ? `.${item.extension}` : "";
+    if (!forceSuffix) {
+      const direct = (0, import_obsidian3.normalizePath)(destFolderPath ? `${destFolderPath}/${base}${ext}` : `${base}${ext}`);
+      if (!this.app.vault.getAbstractFileByPath(direct)) return direct;
+    }
+    for (let n = 1; n < 1e3; n++) {
+      const candidateName = `${base} ${n}${ext}`;
+      const candidate = (0, import_obsidian3.normalizePath)(destFolderPath ? `${destFolderPath}/${candidateName}` : candidateName);
+      if (!this.app.vault.getAbstractFileByPath(candidate)) return candidate;
+    }
+    return "";
+  }
+  async copyAbstractItem(source, destPath) {
+    if (source instanceof import_obsidian3.TFile) {
+      const data = await this.app.vault.readBinary(source);
+      return await this.app.vault.createBinary(destPath, data);
+    }
+    await this.app.vault.createFolder(destPath);
+    if (source instanceof import_obsidian3.TFolder) {
+      for (const child of source.children) {
+        const childDest = (0, import_obsidian3.normalizePath)(`${destPath}/${child.name}`);
+        await this.copyAbstractItem(child, childDest);
+      }
+    }
+    return this.app.vault.getAbstractFileByPath(destPath) || source;
+  }
+  copySelectedOrFocused() {
+    const sources = this.resolveCarrySourcePaths();
+    if (sources.length === 0) return false;
+    this.clipboardMode = "copy";
+    this.clipboardPaths = sources;
+    this.syncFocusAndSelectionDOM();
+    this.renderSelectionBar();
+    this.renderCarryPill();
+    return true;
+  }
+  cutSelectedOrFocused() {
+    const sources = this.resolveCarrySourcePaths();
+    if (sources.length === 0) return false;
+    this.clipboardMode = "cut";
+    this.clipboardPaths = sources;
+    this.selectedPaths.clear();
+    this.selectionAnchorIndex = null;
+    this.syncFocusAndSelectionDOM();
+    this.renderSelectionBar();
+    this.renderCarryPill();
+    return true;
+  }
+  async pasteClipboardToFocusedFolder() {
+    if (this.clipboardPaths.length === 0 || !this.clipboardMode) return;
+    const mode = this.clipboardMode;
+    const paths = [...this.clipboardPaths];
+    const destFolderPath = this.getFocusedTargetFolderPath();
+    if (mode === "cut") {
+      this.clipboardMode = null;
+      this.clipboardPaths = [];
+      this.renderCarryPill();
+      await this.moveFiles(paths, destFolderPath);
+      return;
+    }
+    let copiedCount = 0;
+    let firstCreatedKey = null;
+    for (const srcPath of paths) {
+      const target = this.app.vault.getAbstractFileByPath(srcPath);
+      if (!target) continue;
+      if (target instanceof import_obsidian3.TFolder && this.isInvalidDropDest(destFolderPath, [target.path])) {
+        continue;
+      }
+      const destPath = this.buildUniqueCopyPath(destFolderPath, target, false);
+      if (!destPath) continue;
+      try {
+        const created = await this.copyAbstractItem(target, destPath);
+        if (!firstCreatedKey) {
+          firstCreatedKey = created instanceof import_obsidian3.TFolder ? `folder:${created.path}` : `file:${created.path}`;
+        }
+        copiedCount++;
+      } catch {
+      }
+    }
+    if (copiedCount > 0) {
+      this.selectedPaths.clear();
+      this.selectionAnchorIndex = null;
+      if (firstCreatedKey) this.focusedItemKey = firstCreatedKey;
+      const destName = destFolderPath || this.app.vault.getName();
+      new import_obsidian3.Notice(`${copiedCount}\uAC1C \uD56D\uBAA9\uC744 '${destName}'\uC5D0 \uBCF5\uC0AC\uD588\uC2B5\uB2C8\uB2E4.`);
+      this.renderAll();
+      this.scrollFocusedIntoView();
+    }
+  }
+  async duplicateFocusedItem() {
+    const target = this.getFocusedAbstractTarget();
+    if (!target || target instanceof import_obsidian3.TFolder && target.isRoot()) return;
+    const parentPath = normalizeFolderRef(target.parent);
+    const destPath = this.buildUniqueCopyPath(parentPath, target, true);
+    if (!destPath) return;
+    try {
+      const copied = await this.copyAbstractItem(target, destPath);
+      this.selectedPaths.clear();
+      this.selectionAnchorIndex = null;
+      this.focusedItemKey = copied instanceof import_obsidian3.TFolder ? `folder:${copied.path}` : `file:${copied.path}`;
+      const displayName = copied instanceof import_obsidian3.TFile && copied.extension === "md" ? copied.basename : copied.name;
+      new import_obsidian3.Notice(`'${displayName}' \uBCF5\uC81C \uC644\uB8CC`);
+      this.renderAll();
+      this.scrollFocusedIntoView();
+    } catch (err) {
+      new import_obsidian3.Notice(`\uBCF5\uC81C \uC2E4\uD328: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  async setAllSubfoldersExpanded(expanded) {
+    const folderPaths = [];
+    const collectAllSubfolders = (folder) => {
+      for (const child of folder.children) {
+        if (child instanceof import_obsidian3.TFolder) {
+          const p = normalizeFolderRef(child);
+          if (p) folderPaths.push(p);
+          collectAllSubfolders(child);
+        }
+      }
+    };
+    for (const card of this.renderedCards) {
+      if (card.isRootCard) continue;
+      const folder = getFolderByPath(this.app, card.folderPath);
+      if (folder) collectAllSubfolders(folder);
+    }
+    if (folderPaths.length === 0) return;
+    await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+    this.renderGridAndHeader();
+  }
+  jumpToCardByIndex(cardIdx) {
+    if (cardIdx < 0 || cardIdx >= this.renderedCards.length) return;
+    const targetCard = this.renderedCards[cardIdx];
+    const firstFileIdx = targetCard.items.findIndex((it) => it.type === "file");
+    this.focusCardItem(cardIdx, firstFileIdx >= 0 ? firstFileIdx : 0, {
+      clearSelection: true,
+      updatePreview: true
+    });
+  }
+  triageToCardByIndex(cardIdx) {
+    if (cardIdx < 0 || cardIdx >= this.renderedCards.length) return;
+    const sources = this.resolveCarrySourcePaths();
+    if (sources.length === 0) return;
+    const targetPath = this.renderedCards[cardIdx].folderPath;
+    if (this.isInvalidDropDest(targetPath, sources)) return;
+    this.focusedCardIndex = cardIdx;
+    void this.moveFiles(sources, targetPath);
   }
   // =========================================================
   // 폴더 카드 순서 변경 (헤더 드래그 & Shift+←/→)
@@ -1824,21 +2100,33 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     }
   }
   handleKeydown(e) {
+    if (e.defaultPrevented) return;
     if (!this.isViewActive()) return;
-    if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select")) {
-      if (e.key === "Escape") e.target.blur();
+    const meta = e.metaKey || e.ctrlKey;
+    const code = e.code;
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyF") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.focusSearchBox();
       return;
     }
-    const meta = e.metaKey || e.ctrlKey;
+    if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select")) {
+      if (e.key === "Escape") {
+        e.target.blur();
+        this.shellEl?.focus();
+      }
+      return;
+    }
     if (e.key === "Escape") {
       if (this.carryPaths.length > 0) {
         e.preventDefault();
         this.cancelCarryMode();
         return;
       }
-      if (this.cutPaths.length > 0) {
+      if (this.clipboardPaths.length > 0) {
         e.preventDefault();
-        this.cutPaths = [];
+        this.clipboardMode = null;
+        this.clipboardPaths = [];
         this.syncFocusAndSelectionDOM();
         this.renderCarryPill();
         this.renderSelectionBar();
@@ -1859,7 +2147,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       }
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "z") {
+    if (!meta && !e.shiftKey && !e.altKey && code === "Slash") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.focusSearchBox();
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyZ") {
       if (this.undoStack.length > 0) {
         e.preventDefault();
         e.stopPropagation();
@@ -1867,39 +2161,59 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       }
       return;
     }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "x") {
-      const sources = this.resolveCarrySourcePaths();
-      if (sources.length > 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.cutPaths = sources;
-        this.selectedPaths.clear();
-        this.selectionAnchorIndex = null;
-        this.syncFocusAndSelectionDOM();
-        this.renderSelectionBar();
-        this.renderCarryPill();
-      }
-      return;
-    }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v") {
-      if (this.cutPaths.length > 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        const paths = [...this.cutPaths];
-        this.cutPaths = [];
-        this.renderCarryPill();
-        void this.moveFiles(paths, this.getFocusedTargetFolderPath());
-      }
-      return;
-    }
-    if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyA") {
       e.preventDefault();
       e.stopPropagation();
-      this.searchInputEl.focus();
-      this.searchInputEl.select();
+      this.selectAllInFocusedCard();
       return;
     }
-    if (!meta && !e.altKey && e.key.toLowerCase() === "n") {
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyD") {
+      e.preventDefault();
+      e.stopPropagation();
+      void this.duplicateFocusedItem();
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyC") {
+      if (!this.hasSelectedText() && this.copySelectedOrFocused()) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyX") {
+      if (!this.hasSelectedText() && this.cutSelectedOrFocused()) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && code === "KeyV") {
+      if (this.clipboardPaths.length > 0 && this.clipboardMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        void this.pasteClipboardToFocusedFolder();
+      }
+      return;
+    }
+    if (meta && !e.shiftKey && !e.altKey && code === "Backspace" || !meta && !e.shiftKey && !e.altKey && code === "Delete") {
+      e.preventDefault();
+      e.stopPropagation();
+      void this.deleteFocusedOrSelected();
+      return;
+    }
+    if (!meta && !e.shiftKey && !e.altKey && code === "F2" || !meta && !e.shiftKey && !e.altKey && code === "KeyR") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.renameFocusedItem();
+      return;
+    }
+    if (!meta && !e.shiftKey && !e.altKey && (code === "BracketLeft" || code === "BracketRight")) {
+      e.preventDefault();
+      e.stopPropagation();
+      void this.setAllSubfoldersExpanded(code === "BracketRight");
+      return;
+    }
+    if (!meta && !e.altKey && code === "KeyN") {
       e.preventDefault();
       e.stopPropagation();
       if (e.shiftKey) this.promptCreateFolder();
@@ -1907,6 +2221,16 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       return;
     }
     if (this.renderedCards.length === 0) return;
+    if (!meta && !e.shiftKey && /^Digit[1-9]$/.test(code)) {
+      const cardIdx = Number(code.slice(5)) - 1;
+      if (cardIdx < this.renderedCards.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.altKey) this.triageToCardByIndex(cardIdx);
+        else this.jumpToCardByIndex(cardIdx);
+      }
+      return;
+    }
     if (e.altKey && !meta && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
       e.preventDefault();
       e.stopPropagation();
@@ -1972,9 +2296,6 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (!meta && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
       e.stopPropagation();
-      if (e.key === "ArrowLeft" && this.focusedCardIndex === 0) {
-        if (this.focusLeftFileExplorer()) return;
-      }
       const delta = e.key === "ArrowRight" ? 1 : -1;
       const nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
       const targetCard = this.renderedCards[nextIdx];
@@ -2225,33 +2546,6 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
         void this.activateBoardView(folderPath);
       }
     });
-    this.registerDomEvent(document, "keydown", (e) => {
-      if (e.key !== "ArrowRight" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (document.querySelector(".modal-container")) return;
-      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select")) return;
-      const activeLeaf = this.app.workspace.activeLeaf;
-      if (!activeLeaf || activeLeaf.view.getViewType() !== "file-explorer") return;
-      const boardLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
-      if (boardLeaves.length === 0) return;
-      const explorerEl = activeLeaf.view.containerEl;
-      const focusedNode = explorerEl.querySelector(
-        ".tree-item-self.has-focus, .tree-item-self.is-being-focused"
-      );
-      if (focusedNode?.classList.contains("nav-folder-title")) {
-        const treeItem = focusedNode.closest(".tree-item");
-        const isCollapsed = treeItem?.classList.contains("is-collapsed");
-        const hasChildren = Boolean(treeItem?.querySelector(".tree-item-children > .tree-item"));
-        if (isCollapsed || hasChildren) return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      const targetLeaf = boardLeaves[0];
-      this.app.workspace.revealLeaf(targetLeaf);
-      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-      if (targetLeaf.view instanceof FolderBoardView) {
-        targetLeaf.view.focusFromLeftSidebar();
-      }
-    }, true);
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
   }
   onunload() {
@@ -2310,6 +2604,14 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     else this.expandedSet.delete(path);
     await this.saveSettings();
   }
+  // [ID 6.6.6] 여러 하위 폴더 펼침/접힘 일괄 반영 (C/E 단축키용 단일 저장)
+  async setFoldersExpandedBatch(paths, expanded) {
+    for (const p of paths) {
+      if (expanded) this.expandedSet.add(p);
+      else this.expandedSet.delete(p);
+    }
+    await this.saveSettings();
+  }
   async renameExpandedFolder(oldPath, newPath) {
     let changed = false;
     if (this.expandedSet.has(oldPath)) {
@@ -2329,7 +2631,6 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     this.settings.folderOrder = nextOrder;
     if (changed) await this.saveSettings();
   }
-  // [ID 6.6.5] 부모 폴더별 사용자 지정 카드 순서 조회/저장
   getFolderOrder(parentPath) {
     return this.settings.folderOrder[parentPath] || [];
   }

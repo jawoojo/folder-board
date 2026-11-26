@@ -1,5 +1,5 @@
 // [ID 6.6] Folder Board 옵시디언 플러그인 엔트리포인트
-// -> ItemView 등록, 리본/커맨드, 영속 펼침·폴더 순서 저장, 좌측 네이티브 파일 탐색기 ↔ 폴더 보드 방향키 브릿지를 관리함.
+// -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침 상태 및 사용자 지정 폴더 순서를 관리함.
 import { Plugin, WorkspaceLeaf } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
@@ -36,42 +36,6 @@ export default class FolderBoardPlugin extends Plugin {
         void this.activateBoardView(folderPath);
       }
     });
-
-    // [ID 6.6.3] 좌측 네이티브 파일 탐색기 → Folder Board 방향키(→) 복귀 브릿지
-    // -> 왼쪽 파일 탐색기에서 파일(또는 비어 있는 펼쳐진 폴더)에 포커스된 상태로 → 를 누르면 Folder Board 첫 카드로 자연스럽게 복귀함.
-    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
-      if (e.key !== "ArrowRight" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (document.querySelector(".modal-container")) return;
-      if (e.target instanceof HTMLElement && e.target.closest("input, textarea, select")) return;
-
-      const activeLeaf = this.app.workspace.activeLeaf;
-      if (!activeLeaf || activeLeaf.view.getViewType() !== "file-explorer") return;
-
-      const boardLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
-      if (boardLeaves.length === 0) return;
-
-      // 접혀 있는 폴더나 자식이 있는 펼쳐진 폴더에서는 옵시디언 기본 → (펼치기/하위 진입) 동작을 존중함
-      const explorerEl = activeLeaf.view.containerEl;
-      const focusedNode = explorerEl.querySelector<HTMLElement>(
-        ".tree-item-self.has-focus, .tree-item-self.is-being-focused"
-      );
-      if (focusedNode?.classList.contains("nav-folder-title")) {
-        const treeItem = focusedNode.closest(".tree-item");
-        const isCollapsed = treeItem?.classList.contains("is-collapsed");
-        const hasChildren = Boolean(treeItem?.querySelector(".tree-item-children > .tree-item"));
-        if (isCollapsed || hasChildren) return;
-      }
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      const targetLeaf = boardLeaves[0];
-      this.app.workspace.revealLeaf(targetLeaf);
-      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-      if (targetLeaf.view instanceof FolderBoardView) {
-        targetLeaf.view.focusFromLeftSidebar();
-      }
-    }, true);
 
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
   }
@@ -143,6 +107,15 @@ export default class FolderBoardPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  // [ID 6.6.6] 여러 하위 폴더 펼침/접힘 일괄 반영 (C/E 단축키용 단일 저장)
+  async setFoldersExpandedBatch(paths: string[], expanded: boolean): Promise<void> {
+    for (const p of paths) {
+      if (expanded) this.expandedSet.add(p);
+      else this.expandedSet.delete(p);
+    }
+    await this.saveSettings();
+  }
+
   async renameExpandedFolder(oldPath: string, newPath: string): Promise<void> {
     let changed = false;
     if (this.expandedSet.has(oldPath)) {
@@ -151,7 +124,6 @@ export default class FolderBoardPlugin extends Plugin {
       changed = true;
     }
 
-    // [ID 6.6.4] 폴더 이름/경로 변경 시 사용자 지정 순서 맵도 함께 동기화
     const nextOrder: Record<string, string[]> = {};
     for (const [parentKey, list] of Object.entries(this.settings.folderOrder)) {
       const updatedParent = parentKey === oldPath ? newPath : parentKey;
@@ -166,7 +138,6 @@ export default class FolderBoardPlugin extends Plugin {
     if (changed) await this.saveSettings();
   }
 
-  // [ID 6.6.5] 부모 폴더별 사용자 지정 카드 순서 조회/저장
   getFolderOrder(parentPath: string): string[] {
     return this.settings.folderOrder[parentPath] || [];
   }
