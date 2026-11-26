@@ -1,5 +1,5 @@
 // [ID 6.4] Folder Board 플러그인 설정 탭
-// -> 레이아웃, 정렬, 노트 열기 방식, 세로 경계(↑/↓) 카드 이동 정책, 영속 폴더 펼침 초기화를 관리함.
+// -> 레이아웃, 정렬, 노트 열기 방식, 세로 경계 이동 정책, 영속 펼침/폴더 순서 초기화를 관리함.
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FolderBoardPlugin from "./main";
 import type { LayoutColumns, OpenBehavior, SortMode, VerticalEdgeBehavior } from "./types";
@@ -74,6 +74,16 @@ export class FolderBoardSettingTab extends PluginSettingTab {
             this.plugin.settings.verticalEdgeBehavior = value as VerticalEdgeBehavior;
             await this.plugin.saveSettings();
           })
+      );
+
+    new Setting(containerEl)
+      .setName("사용자 지정 폴더 순서 초기화")
+      .addButton((btn) =>
+        btn.setButtonText("초기화").onClick(async () => {
+          this.plugin.settings.folderOrder = {};
+          await this.plugin.saveSettings();
+          this.plugin.refreshOpenViews();
+        })
       );
 
     new Setting(containerEl)

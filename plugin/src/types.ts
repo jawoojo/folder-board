@@ -1,5 +1,5 @@
 // [ID 6.1] Folder Board 플러그인 공용 타입 및 기본 설정
-// -> 레이아웃(2/3/4열 · 세로 자동 · 가로 스크롤), 정렬, 열기 방식, 세로 경계 이동 방식, 영속 폴더 펼침을 정의함.
+// -> 레이아웃, 정렬, 열기 방식, 세로 경계 이동 정책, 영속 폴더 펼침, 사용자 지정 폴더 카드 순서를 정의함.
 
 export type SortMode = "name" | "mtime";
 export type OpenBehavior = "same-tab" | "new-tab";
@@ -10,10 +10,11 @@ export interface FolderBoardSettings {
   gridCols: LayoutColumns;
   sortBy: SortMode;
   openBehavior: OpenBehavior;
-  // [ID 6.1.2] 최상단/최하단 ↑↓ 이동 정책 -> adaptive(가로=내부 순환, 세로/그리드=아래/위 행 카드 연결) vs loop(항상 내부 순환)
   verticalEdgeBehavior: VerticalEdgeBehavior;
   // [ID 6.1.1] 영속적 폴더 펼침 상태 -> 하위 폴더 Drill-down 복귀 및 옵시디언 재시작 후에도 접힘/펼침 상태를 유지함
   expandedFolders: string[];
+  // [ID 6.1.3] 사용자 지정 폴더 카드 순서 -> 부모 경로별 자식 폴더 경로 배열을 저장해 원하는 배치를 영구 유지함
+  folderOrder: Record<string, string[]>;
 }
 
 export const DEFAULT_SETTINGS: FolderBoardSettings = {
@@ -21,7 +22,8 @@ export const DEFAULT_SETTINGS: FolderBoardSettings = {
   sortBy: "name",
   openBehavior: "same-tab",
   verticalEdgeBehavior: "adaptive",
-  expandedFolders: []
+  expandedFolders: [],
+  folderOrder: {}
 };
 
 export interface CardTreeItem {

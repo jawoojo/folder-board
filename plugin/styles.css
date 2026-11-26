@@ -276,9 +276,20 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 35%, transparent);
 }
 
+/* [ID 6.7.5] 폴더 카드 순서 변경 드래그 삽입선 */
+.fb-card.is-reorder-before {
+  box-shadow: -3px 0 0 0 var(--interactive-accent);
+}
+.fb-card.is-reorder-after {
+  box-shadow: 3px 0 0 0 var(--interactive-accent);
+}
+
+/* [ID 6.7.6] 카드 헤더 상단 모서리 곡률 일치 -> 외곽 카드 border(1px) 안쪽 곡률과 정확히 맞춰 포커스 테두리 모서리 짤림 제거 */
 .fb-card-header {
   min-height: 36px;
   padding: 4px 10px;
+  border-top-left-radius: calc(var(--radius-m, 8px) - 1px);
+  border-top-right-radius: calc(var(--radius-m, 8px) - 1px);
   border-bottom: 1px solid var(--divider-color, var(--background-modifier-border));
   display: flex;
   align-items: center;
