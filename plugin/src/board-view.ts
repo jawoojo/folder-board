@@ -999,26 +999,20 @@ export class FolderBoardView extends ItemView {
         }
       });
 
-      // 카드 헤더
-      const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
-      const headerEl = cardEl.createDiv({
-        cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
-      });
-      const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
-      const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
-      const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-
-      if (cardModel.isRootCard) {
-        setIcon(iconEl, "inbox");
-        titleWrap.createSpan({ cls: "fb-root-pill", text: "직속" });
-      } else {
-        applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
-      }
-
-      const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
-      metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
-
+      // [ID 6.5.38] 직속 영역은 상단 브레드크럼에 경로가 이미 표시되므로 헤더(제목·아이콘·직속 배지) 생략
       if (!cardModel.isRootCard) {
+        const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
+        const headerEl = cardEl.createDiv({
+          cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
+        });
+        const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
+        const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
+        const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
+        applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
+
+        const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
+        metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
+
         headerEl.setAttr("draggable", "true");
         headerEl.addEventListener("dragstart", (e) =>
           this.handleCardDragStart(e, cardModel.folderPath, cardModel.title)
@@ -1035,36 +1029,35 @@ export class FolderBoardView extends ItemView {
         });
 
         headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
-      }
+        headerEl.addEventListener("contextmenu", (e) => {
+          const folder = getFolderByPath(this.app, cardModel.folderPath);
+          if (folder) this.openContextMenu(e, folder);
+        });
 
-      // [ID 6.5.20] 루트 카드 포함 모든 카드 헤더 및 빈 영역 우클릭 -> 네이티브 생성 메뉴(새 노트/폴더/캔버스/베이스 등) 호출
-      headerEl.addEventListener("contextmenu", (e) => {
-        const folder = getFolderByPath(this.app, cardModel.folderPath);
-        if (folder) this.openContextMenu(e, folder);
-      });
-
-      headerEl.addEventListener("click", () => {
-        this.selectedPaths.clear();
-        this.selectionAnchorIndex = null;
-        if (!cardModel.isRootCard) {
+        headerEl.addEventListener("click", () => {
+          this.selectedPaths.clear();
+          this.selectionAnchorIndex = null;
           this.focusedCardIndex = cardIdx;
           this.focusedItemKey = CARD_HEADER_KEY;
           this.syncFocusAndSelectionDOM();
           this.renderSelectionBar();
           this.scrollFocusedIntoView();
-        } else if (cardModel.items.length > 0) {
-          const firstFileIdx = cardModel.items.findIndex((it) => it.type === "file");
-          this.focusCardItem(cardIdx, firstFileIdx >= 0 ? firstFileIdx : 0);
-        } else {
-          this.focusedCardIndex = cardIdx;
-          this.focusedItemKey = null;
-          this.syncFocusAndSelectionDOM();
-          this.renderSelectionBar();
-        }
-      });
+        });
+      }
 
       // 네이티브 탐색기 본문 (빈 공간 우클릭 시 해당 카드 폴더의 네이티브 생성 메뉴 표시)
       const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
+      listEl.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement | null)?.closest(".fb-row")) return;
+        this.selectedPaths.clear();
+        this.selectionAnchorIndex = null;
+        this.focusedCardIndex = cardIdx;
+        if (cardModel.items.length === 0) {
+          this.focusedItemKey = cardModel.isRootCard ? null : CARD_HEADER_KEY;
+        }
+        this.syncFocusAndSelectionDOM();
+        this.renderSelectionBar();
+      });
       listEl.addEventListener("contextmenu", (e) => {
         if ((e.target as HTMLElement | null)?.closest(".fb-row")) return;
         const folder = getFolderByPath(this.app, cardModel.folderPath);

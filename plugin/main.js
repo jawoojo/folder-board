@@ -948,22 +948,17 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           "data-card-index": String(cardIdx)
         }
       });
-      const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
-      const headerEl = cardEl.createDiv({
-        cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
-      });
-      const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
-      const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
-      const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-      if (cardModel.isRootCard) {
-        (0, import_obsidian3.setIcon)(iconEl, "inbox");
-        titleWrap.createSpan({ cls: "fb-root-pill", text: "\uC9C1\uC18D" });
-      } else {
-        applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
-      }
-      const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
-      metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
       if (!cardModel.isRootCard) {
+        const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
+        const headerEl = cardEl.createDiv({
+          cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
+        });
+        const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
+        const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
+        const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
+        applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
+        const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
+        metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
         headerEl.setAttr("draggable", "true");
         headerEl.addEventListener(
           "dragstart",
@@ -979,31 +974,32 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           this.navigateToFolder(cardModel.folderPath);
         });
         headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
-      }
-      headerEl.addEventListener("contextmenu", (e) => {
-        const folder = getFolderByPath(this.app, cardModel.folderPath);
-        if (folder) this.openContextMenu(e, folder);
-      });
-      headerEl.addEventListener("click", () => {
-        this.selectedPaths.clear();
-        this.selectionAnchorIndex = null;
-        if (!cardModel.isRootCard) {
+        headerEl.addEventListener("contextmenu", (e) => {
+          const folder = getFolderByPath(this.app, cardModel.folderPath);
+          if (folder) this.openContextMenu(e, folder);
+        });
+        headerEl.addEventListener("click", () => {
+          this.selectedPaths.clear();
+          this.selectionAnchorIndex = null;
           this.focusedCardIndex = cardIdx;
           this.focusedItemKey = CARD_HEADER_KEY;
           this.syncFocusAndSelectionDOM();
           this.renderSelectionBar();
           this.scrollFocusedIntoView();
-        } else if (cardModel.items.length > 0) {
-          const firstFileIdx = cardModel.items.findIndex((it) => it.type === "file");
-          this.focusCardItem(cardIdx, firstFileIdx >= 0 ? firstFileIdx : 0);
-        } else {
-          this.focusedCardIndex = cardIdx;
-          this.focusedItemKey = null;
-          this.syncFocusAndSelectionDOM();
-          this.renderSelectionBar();
-        }
-      });
+        });
+      }
       const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
+      listEl.addEventListener("click", (e) => {
+        if (e.target?.closest(".fb-row")) return;
+        this.selectedPaths.clear();
+        this.selectionAnchorIndex = null;
+        this.focusedCardIndex = cardIdx;
+        if (cardModel.items.length === 0) {
+          this.focusedItemKey = cardModel.isRootCard ? null : CARD_HEADER_KEY;
+        }
+        this.syncFocusAndSelectionDOM();
+        this.renderSelectionBar();
+      });
       listEl.addEventListener("contextmenu", (e) => {
         if (e.target?.closest(".fb-row")) return;
         const folder = getFolderByPath(this.app, cardModel.folderPath);

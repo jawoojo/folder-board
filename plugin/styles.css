@@ -261,6 +261,28 @@
   transition: border-color 120ms ease, background-color 120ms ease;
 }
 
+/* [ID 6.7.8] 직속 노트 영역 차별화 (보더·구분선 없는 순수 오픈 컬럼) */
+/* -> 폴더 박스(사각형 카드)와 시각적 위계를 명확히 분리해 현재 평면에 바로 놓인 직속 노트임을 직관적으로 표현함 */
+.fb-card.is-root-card {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding-right: 4px;
+}
+.fb-card.is-root-card:hover,
+.fb-card.is-root-card.is-focused-card {
+  border-color: transparent;
+}
+.fb-card.is-root-card .fb-card-body.nav-files-container {
+  padding: 0 4px 6px 0;
+}
+.fb-card.is-root-card.is-drag-over,
+.fb-card.is-root-card.is-carry-target {
+  background-color: var(--background-secondary);
+  border-radius: var(--radius-m, 8px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 35%, transparent);
+}
+
 .fb-card:hover {
   border-color: var(--background-modifier-border-hover);
 }
