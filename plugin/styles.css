@@ -215,6 +215,20 @@
   min-height: auto;
 }
 
+/* [ID 6.7.3] 세로 모드(넓이 자동 맞춤) -> 현재 폭에 따라 열 수를 자동 계산하고 여러 줄이면 위아래 스크롤 */
+.fb-grid.fb-layout-auto {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.fb-grid.fb-layout-auto.fb-rows-1 {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-auto-rows: minmax(260px, 1fr);
+}
+.fb-grid.fb-layout-auto.fb-rows-auto {
+  grid-auto-rows: 320px;
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
 .fb-grid.fb-layout-scroll {
   display: flex;
   flex-direction: row;

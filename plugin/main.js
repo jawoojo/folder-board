@@ -118,34 +118,56 @@ function applyNativeDecoration(app, path, iconContainer, titleEl, fallbackIcon) 
   }
   (0, import_obsidian2.setIcon)(iconContainer, fallbackIcon);
 }
-function openNativeFileMenu(app, event, target, onMutated, onRequestRename) {
+function openNativeFileMenu(app, event, target, cb) {
   const menu = new import_obsidian2.Menu();
-  if (target instanceof import_obsidian2.TFile) {
+  if (target instanceof import_obsidian2.TFolder) {
+    const folderPath = target.isRoot() || target.path === "/" ? "" : target.path;
     menu.addItem(
-      (item) => item.setTitle("\uC0C8 \uD0ED\uC5D0\uC11C \uC5F4\uAE30").setIcon("file-plus").onClick(async () => {
+      (item) => item.setTitle("\uC0C8 \uB178\uD2B8").setIcon("file-plus").setSection("action-primary").onClick(() => cb.onRequestCreateNote(folderPath))
+    );
+    menu.addItem(
+      (item) => item.setTitle("\uC0C8 \uD3F4\uB354").setIcon("folder-plus").setSection("action-primary").onClick(() => cb.onRequestCreateFolder(folderPath))
+    );
+    if (!target.isRoot()) {
+      menu.addItem(
+        (item) => item.setTitle("\uC774\uB984 \uBC14\uAFB8\uAE30").setIcon("pencil").setSection("danger").onClick(() => cb.onRequestRename(target))
+      );
+      menu.addItem(
+        (item) => item.setTitle("\uC0AD\uC81C").setIcon("trash").setSection("danger").setWarning(true).onClick(async () => {
+          try {
+            await app.vault.trash(target, true);
+            cb.onMutated();
+          } catch (err) {
+            new import_obsidian2.Notice(`\uC0AD\uC81C \uC2E4\uD328: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })
+      );
+    }
+  } else if (target instanceof import_obsidian2.TFile) {
+    menu.addItem(
+      (item) => item.setTitle("\uC0C8 \uD0ED\uC5D0\uC11C \uC5F4\uAE30").setIcon("file-plus").setSection("open").onClick(async () => {
         await app.workspace.getLeaf("tab").openFile(target);
       })
     );
+    menu.addItem(
+      (item) => item.setTitle("\uC774\uB984 \uBC14\uAFB8\uAE30").setIcon("pencil").setSection("danger").onClick(() => cb.onRequestRename(target))
+    );
+    menu.addItem(
+      (item) => item.setTitle("\uC0AD\uC81C").setIcon("trash").setSection("danger").setWarning(true).onClick(async () => {
+        try {
+          await app.vault.trash(target, true);
+          cb.onMutated();
+        } catch (err) {
+          new import_obsidian2.Notice(`\uC0AD\uC81C \uC2E4\uD328: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })
+    );
   }
-  menu.addItem(
-    (item) => item.setTitle("\uC774\uB984 \uBC14\uAFB8\uAE30").setIcon("pencil").onClick(() => onRequestRename(target))
-  );
-  menu.addItem(
-    (item) => item.setTitle("\uC0AD\uC81C").setIcon("trash").setWarning(true).onClick(async () => {
-      try {
-        await app.vault.trash(target, true);
-        onMutated();
-      } catch (err) {
-        new import_obsidian2.Notice(`\uC0AD\uC81C \uC2E4\uD328: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    })
-  );
-  menu.addSeparator();
-  app.workspace.trigger("file-menu", menu, target, "file-explorer");
+  app.workspace.trigger("file-menu", menu, target, "file-explorer-context-menu", cb.leaf);
   menu.showAtMouseEvent(event);
 }
 function getFolderByPath(app, path) {
-  if (!path) return app.vault.getRoot();
+  if (!path || path === "/") return app.vault.getRoot();
   const abs = app.vault.getAbstractFileByPath(path);
   return abs instanceof import_obsidian2.TFolder ? abs : null;
 }
@@ -198,6 +220,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.layoutBtns = [];
     this.markdownComponent = null;
     this.vaultRefs = [];
+    this.resizeObserver = null;
     this.refreshTimer = null;
     this.plugin = plugin;
     this.boundKeydown = this.handleKeydown.bind(this);
@@ -278,6 +301,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.contentEl.removeEventListener("dragleave", this.boundDragLeave);
     this.contentEl.removeEventListener("drop", this.boundDrop);
     document.removeEventListener("dragend", this.boundDragEnd);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
@@ -326,7 +353,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       { value: 2, label: "2", aria: "2\uC5F4 \uADF8\uB9AC\uB4DC" },
       { value: 3, label: "3", aria: "3\uC5F4 \uADF8\uB9AC\uB4DC" },
       { value: 4, label: "4", aria: "4\uC5F4 \uADF8\uB9AC\uB4DC" },
-      { value: "scroll", label: "", aria: "\uC138\uB85C \uD3BC\uCE68 (\uAC00\uB85C \uC2A4\uD06C\uB864)", icon: "columns" }
+      { value: "auto", label: "", aria: "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)", icon: "layout-grid" },
+      { value: "scroll", label: "", aria: "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)", icon: "columns" }
     ];
     this.layoutBtns = layoutOptions.map((opt) => {
       const btn = colGroup.createEl("button", {
@@ -369,6 +397,12 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const body = this.shellEl.createDiv({ cls: "fb-body" });
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.plugin.settings.gridCols === "auto" && this.renderedCards.length > 0) {
+        this.applyGridLayoutClasses(this.renderedCards.length);
+      }
+    });
+    this.resizeObserver.observe(this.canvasEl);
     this.canvasEl.addEventListener(
       "wheel",
       (e) => {
@@ -728,19 +762,38 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       }
     });
   }
-  renderGrid(cards) {
-    this.gridEl.empty();
+  applyGridLayoutClasses(cardCount) {
     const prefLayout = this.plugin.settings.gridCols;
     const isScrollMode = prefLayout === "scroll";
     this.canvasEl.toggleClass("is-horizontal-scroll", isScrollMode);
     if (isScrollMode) {
       this.gridEl.className = "fb-grid fb-layout-scroll";
+    } else if (prefLayout === "auto") {
+      const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
+      const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
+      const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
+      this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
     } else {
-      const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cards.length)));
-      const rowCount = Math.max(1, Math.ceil(cards.length / effectiveCols));
+      const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
+      const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
       const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
       this.gridEl.className = `fb-grid fb-cols-${effectiveCols} ${rowClass}`;
     }
+  }
+  openContextMenu(e, target) {
+    e.preventDefault();
+    e.stopPropagation();
+    openNativeFileMenu(this.app, e, target, {
+      leaf: this.leaf,
+      onMutated: () => this.renderAll(),
+      onRequestRename: (file) => this.promptRename(file),
+      onRequestCreateNote: (folderPath) => this.promptCreateNote(folderPath),
+      onRequestCreateFolder: (folderPath) => this.promptCreateFolder(folderPath)
+    });
+  }
+  renderGrid(cards) {
+    this.gridEl.empty();
+    this.applyGridLayoutClasses(cards.length);
     if (cards.length === 0) {
       this.gridEl.createDiv({ cls: "fb-empty-grid", text: "\uC77C\uCE58\uD558\uB294 \uD56D\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4" });
       return;
@@ -782,19 +835,11 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           this.navigateToFolder(cardModel.folderPath);
         });
         headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
-        headerEl.addEventListener("contextmenu", (e) => {
-          const folder = getFolderByPath(this.app, cardModel.folderPath);
-          if (!folder) return;
-          e.preventDefault();
-          openNativeFileMenu(
-            this.app,
-            e,
-            folder,
-            () => this.renderAll(),
-            (target) => this.promptRename(target)
-          );
-        });
       }
+      headerEl.addEventListener("contextmenu", (e) => {
+        const folder = getFolderByPath(this.app, cardModel.folderPath);
+        if (folder) this.openContextMenu(e, folder);
+      });
       headerEl.addEventListener("click", () => {
         this.selectedPaths.clear();
         this.selectionAnchorIndex = null;
@@ -815,6 +860,11 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         }
       });
       const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
+      listEl.addEventListener("contextmenu", (e) => {
+        if (e.target?.closest(".fb-row")) return;
+        const folder = getFolderByPath(this.app, cardModel.folderPath);
+        if (folder) this.openContextMenu(e, folder);
+      });
       if (cardModel.items.length === 0) {
         listEl.createDiv({ cls: "fb-empty-card", text: "\uBE44\uC5B4 \uC788\uC74C" });
         return;
@@ -822,14 +872,17 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       cardModel.items.forEach((item, itemIdx) => {
         const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
         if (item.type === "folder") {
+          const isSelected = this.selectedPaths.has(item.path);
           const isCarryFolder = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === item.path;
           const row = listEl.createDiv({
-            cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isFocused ? " is-focused" : "") + (isCarryFolder ? " is-carry-target" : ""),
+            cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCarryFolder ? " is-carry-target" : ""),
             attr: {
               "data-path": item.path,
+              "data-drag-path": item.path,
               "data-drop-folder": item.path,
               "data-item-key": item.key,
-              "data-card-index": String(cardIdx)
+              "data-card-index": String(cardIdx),
+              draggable: "true"
             }
           });
           row.style.paddingLeft = `${8 + item.depth * 14}px`;
@@ -845,6 +898,23 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           }
           row.addEventListener("click", async (e) => {
             e.stopPropagation();
+            if (e.shiftKey && cardIdx === this.focusedCardIndex) {
+              const anchor = this.selectionAnchorIndex ?? this.findFocusedCardAndIndex().itemIndex;
+              const safeAnchor = anchor >= 0 ? anchor : itemIdx;
+              this.selectionAnchorIndex = safeAnchor;
+              this.selectRangeInCard(cardIdx, safeAnchor, itemIdx);
+              return;
+            }
+            if (e.metaKey || e.ctrlKey) {
+              this.focusedCardIndex = cardIdx;
+              this.focusedItemKey = item.key;
+              this.selectionAnchorIndex = itemIdx;
+              if (this.selectedPaths.has(item.path)) this.selectedPaths.delete(item.path);
+              else this.selectedPaths.add(item.path);
+              this.syncFocusAndSelectionDOM();
+              this.renderSelectionBar();
+              return;
+            }
             this.focusedCardIndex = cardIdx;
             this.focusedItemKey = item.key;
             this.selectedPaths.clear();
@@ -858,16 +928,9 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           });
           row.addEventListener("contextmenu", (e) => {
             const folder = getFolderByPath(this.app, item.path);
-            if (!folder) return;
-            e.preventDefault();
-            openNativeFileMenu(
-              this.app,
-              e,
-              folder,
-              () => this.renderAll(),
-              (target) => this.promptRename(target)
-            );
+            if (folder) this.openContextMenu(e, folder);
           });
+          row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
         } else {
           const isSelected = this.selectedPaths.has(item.path);
           const row = listEl.createDiv({
@@ -891,15 +954,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           });
           row.addEventListener("contextmenu", (e) => {
             const file = getFileByPath(this.app, item.path);
-            if (!file) return;
-            e.preventDefault();
-            openNativeFileMenu(
-              this.app,
-              e,
-              file,
-              () => this.renderAll(),
-              (target) => this.promptRename(target)
-            );
+            if (file) this.openContextMenu(e, file);
           });
           row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
         }
@@ -907,7 +962,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     });
   }
   renderShelf() {
-    this.shelfPaths = this.shelfPaths.filter((p) => getFileByPath(this.app, p) !== null);
+    this.shelfPaths = this.shelfPaths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null);
     const hasItems = this.shelfPaths.length > 0;
     const shouldShow = hasItems || this.isDragging;
     this.shelfEl.toggleClass("is-collapsed", !shouldShow);
@@ -918,13 +973,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       return;
     }
     for (const path of this.shelfPaths) {
-      const file = getFileByPath(this.app, path);
-      if (!file) continue;
+      const abs = this.app.vault.getAbstractFileByPath(path);
+      if (!abs) continue;
       const chip = this.shelfListEl.createDiv({
         cls: "fb-shelf-chip",
         attr: { draggable: "true", "data-drag-path": path }
       });
-      chip.createSpan({ text: file.extension === "md" ? file.basename : file.name });
+      const label = abs instanceof import_obsidian3.TFile && abs.extension === "md" ? abs.basename : abs.name;
+      chip.createSpan({ text: label });
       const rm = chip.createEl("button", { cls: "clickable-icon fb-shelf-chip-rm" });
       (0, import_obsidian3.setIcon)(rm, "x");
       rm.addEventListener("click", (e) => {
@@ -1062,7 +1118,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.selectedPaths.clear();
     for (let i = start; i <= end; i++) {
       const it = card.items[i];
-      if (it.type === "file") this.selectedPaths.add(it.path);
+      this.selectedPaths.add(it.path);
     }
     const safeTarget = Math.max(0, Math.min(targetIdx, card.items.length - 1));
     this.focusedCardIndex = cardIdx;
@@ -1156,36 +1212,89 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.navigateToFolder(parentPath);
   }
   // =========================================================
-  // Cmd + 방향키 들고 이동 (Carry Mode)
+  // [ID 6.5.21] Cmd/Ctrl + 방향키 들고 이동 (파일 + 폴더 지원 · 현재 위치 기준 바로 위/아래 폴더 타겟팅)
+  // -> 위/아래 키 첫 입력 시 카드 최상단부터 다시 내려가지 않고, 현재 포커싱 위치 바로 위/아래 폴더로 즉시 점프함.
   // =========================================================
+  isInvalidDropDest(destPath, movingPaths) {
+    const normDest = normalizeFolderStr(destPath);
+    return movingPaths.some((src) => {
+      const normSrc = normalizeFolderStr(src);
+      if (!normSrc) return true;
+      return normDest === normSrc || normDest.startsWith(`${normSrc}/`);
+    });
+  }
+  resolveCarrySourcePaths() {
+    if (this.selectedPaths.size > 0) {
+      return [...this.selectedPaths];
+    }
+    const curCard = this.renderedCards[this.focusedCardIndex];
+    if (this.focusedItemKey === CARD_HEADER_KEY && curCard && !curCard.isRootCard) {
+      return [curCard.folderPath];
+    }
+    if (this.focusedItemKey?.startsWith("folder:")) {
+      const p = normalizeFolderStr(this.focusedItemKey.slice(7));
+      return p ? [p] : [];
+    }
+    if (this.focusedItemKey?.startsWith("file:")) {
+      const f = getFileByPath(this.app, this.focusedItemKey.slice(5));
+      return f ? [f.path] : [];
+    }
+    return [];
+  }
+  getValidFolderTargetsInCard(card) {
+    const targets = [];
+    if (!this.isInvalidDropDest(card.folderPath, this.carryPaths)) {
+      targets.push({ path: card.folderPath, pos: -1 });
+    }
+    card.items.forEach((it, idx) => {
+      if (it.type === "folder" && !this.isInvalidDropDest(it.path, this.carryPaths)) {
+        targets.push({ path: it.path, pos: idx });
+      }
+    });
+    return targets;
+  }
   beginOrStepCarry(direction) {
     if (this.renderedCards.length === 0) return;
-    if (this.carryPaths.length === 0) {
-      if (this.selectedPaths.size > 0) {
-        this.carryPaths = [...this.selectedPaths];
-      } else {
-        const focusedFile = this.getFocusedFile();
-        if (!focusedFile) return;
-        this.carryPaths = [focusedFile.path];
-      }
+    const justStarted = this.carryPaths.length === 0;
+    if (justStarted) {
+      const sources = this.resolveCarrySourcePaths();
+      if (sources.length === 0) return;
+      this.carryPaths = sources;
       this.carryCardIndex = this.focusedCardIndex;
-      this.carryTargetFolderPath = this.renderedCards[this.carryCardIndex]?.folderPath ?? this.currentFolderPath;
+      this.carryTargetFolderPath = null;
     }
     if (direction === "left" || direction === "right") {
       const delta = direction === "right" ? 1 : -1;
-      this.carryCardIndex = (this.carryCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
-      this.carryTargetFolderPath = this.renderedCards[this.carryCardIndex].folderPath;
+      const total = this.renderedCards.length;
+      for (let step = 1; step <= total; step++) {
+        const candidateIdx = (this.carryCardIndex + delta * step + total) % total;
+        const candidatePath = this.renderedCards[candidateIdx].folderPath;
+        if (!this.isInvalidDropDest(candidatePath, this.carryPaths)) {
+          this.carryCardIndex = candidateIdx;
+          this.carryTargetFolderPath = candidatePath;
+          break;
+        }
+      }
     } else {
       const card = this.renderedCards[this.carryCardIndex];
       if (!card) return;
-      const folderTargets = [
-        card.folderPath,
-        ...card.items.filter((it) => it.type === "folder").map((it) => it.path)
-      ];
-      const curIdx = folderTargets.indexOf(this.carryTargetFolderPath ?? card.folderPath);
-      const delta = direction === "down" ? 1 : -1;
-      const nextIdx = Math.max(0, Math.min((curIdx === -1 ? 0 : curIdx) + delta, folderTargets.length - 1));
-      this.carryTargetFolderPath = folderTargets[nextIdx];
+      const targets = this.getValidFolderTargetsInCard(card);
+      if (targets.length === 0) return;
+      if (justStarted) {
+        const originPos = this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+        if (direction === "up") {
+          const above = targets.filter((t) => t.pos < originPos);
+          this.carryTargetFolderPath = above.length > 0 ? above[above.length - 1].path : targets[targets.length - 1].path;
+        } else {
+          const below = targets.filter((t) => t.pos > originPos);
+          this.carryTargetFolderPath = below.length > 0 ? below[0].path : targets[0].path;
+        }
+      } else {
+        const curIdx = targets.findIndex((t) => t.path === this.carryTargetFolderPath);
+        const delta = direction === "down" ? 1 : -1;
+        const nextIdx = curIdx === -1 ? 0 : (curIdx + delta + targets.length) % targets.length;
+        this.carryTargetFolderPath = targets[nextIdx].path;
+      }
     }
     this.syncFocusAndSelectionDOM();
     this.renderSelectionBar();
@@ -1212,10 +1321,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.renderCarryPill();
   }
   // =========================================================
-  // 포커스된 폴더에 노트/폴더 생성 & 이름 변경
+  // 포커스된 폴더(또는 우클릭 지정 폴더)에 노트/폴더 생성 & 이름 변경
   // =========================================================
-  promptCreateNote() {
-    const targetFolderPath = this.getFocusedTargetFolderPath();
+  promptCreateNote(explicitFolderPath) {
+    const targetFolderPath = explicitFolderPath !== void 0 ? normalizeFolderStr(explicitFolderPath) : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
     const modal = new NamePromptModal(this.app, {
@@ -1252,8 +1361,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     };
     modal.open();
   }
-  promptCreateFolder() {
-    const targetFolderPath = this.getFocusedTargetFolderPath();
+  promptCreateFolder(explicitFolderPath) {
+    const targetFolderPath = explicitFolderPath !== void 0 ? normalizeFolderStr(explicitFolderPath) : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
     const modal = new NamePromptModal(this.app, {
@@ -1339,8 +1448,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.renderShelf();
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify(this.activeDragPaths));
-    const firstFile = getFileByPath(this.app, this.activeDragPaths[0]);
-    const label = firstFile ? firstFile.extension === "md" ? firstFile.basename : firstFile.name : path;
+    const firstItem = this.app.vault.getAbstractFileByPath(this.activeDragPaths[0]);
+    const label = firstItem ? firstItem instanceof import_obsidian3.TFile && firstItem.extension === "md" ? firstItem.basename : firstItem.name : path;
     const ghost = document.body.createDiv({
       cls: "fb-drag-ghost",
       text: this.activeDragPaths.length > 1 ? `${label} \uC678 ${this.activeDragPaths.length - 1}\uAC1C` : label
@@ -1409,29 +1518,38 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   }
   addPathsToShelf(paths) {
     for (const p of paths) {
-      if (getFileByPath(this.app, p) && !this.shelfPaths.includes(p)) {
+      if (this.app.vault.getAbstractFileByPath(p) && !this.shelfPaths.includes(p)) {
         this.shelfPaths.push(p);
       }
     }
     this.renderShelf();
   }
+  // [ID 6.5.22] 파일 및 폴더 통합 이동 + 순환 이동(자기 자신/하위로 이동) 방어 + Undo
   async moveFiles(sourcePaths, rawDestFolderPath) {
     const destFolderPath = normalizeFolderStr(rawDestFolderPath);
     const unique = [...new Set(sourcePaths)];
     const moves = [];
     let skipped = 0;
+    let firstMovedType = "file";
     for (const srcPath of unique) {
-      const file = getFileByPath(this.app, srcPath);
-      if (!file) continue;
-      const currentParent = normalizeFolderRef(file.parent);
+      const target = this.app.vault.getAbstractFileByPath(srcPath);
+      if (!target) continue;
+      if (target instanceof import_obsidian3.TFolder && this.isInvalidDropDest(destFolderPath, [target.path])) {
+        skipped++;
+        continue;
+      }
+      const currentParent = normalizeFolderRef(target.parent);
       if (currentParent === destFolderPath) continue;
-      const destPath = (0, import_obsidian3.normalizePath)(destFolderPath ? `${destFolderPath}/${file.name}` : file.name);
+      const destPath = (0, import_obsidian3.normalizePath)(destFolderPath ? `${destFolderPath}/${target.name}` : target.name);
       if (this.app.vault.getAbstractFileByPath(destPath)) {
         skipped++;
         continue;
       }
       try {
-        await this.app.fileManager.renameFile(file, destPath);
+        await this.app.fileManager.renameFile(target, destPath);
+        if (moves.length === 0) {
+          firstMovedType = target instanceof import_obsidian3.TFolder ? "folder" : "file";
+        }
         moves.push({ fromPath: srcPath, toPath: destPath });
       } catch {
         skipped++;
@@ -1444,13 +1562,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.shelfPaths = this.shelfPaths.filter((p) => !movedSources.has(p));
       this.selectedPaths.clear();
       this.selectionAnchorIndex = null;
-      this.focusedItemKey = `file:${moves[0].toPath}`;
+      this.focusedItemKey = `${firstMovedType}:${moves[0].toPath}`;
       const destName = destFolderPath || this.app.vault.getName();
       new import_obsidian3.Notice(`${moves.length}\uAC1C \uD56D\uBAA9\uC744 '${destName}'\uB85C \uC774\uB3D9\uD588\uC2B5\uB2C8\uB2E4.`);
       this.renderAll();
       this.scrollFocusedIntoView();
     } else if (skipped > 0) {
-      new import_obsidian3.Notice("\uB300\uC0C1 \uD3F4\uB354\uC5D0 \uAC19\uC740 \uC774\uB984\uC758 \uD30C\uC77C\uC774 \uC788\uC5B4 \uC774\uB3D9\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      new import_obsidian3.Notice("\uB300\uC0C1 \uD3F4\uB354\uC5D0 \uAC19\uC740 \uC774\uB984\uC774 \uC788\uAC70\uB098 \uC774\uB3D9\uD560 \uC218 \uC5C6\uB294 \uACBD\uB85C\uC785\uB2C8\uB2E4.");
     } else {
       this.syncFocusAndSelectionDOM();
     }
@@ -1460,11 +1578,11 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (!entry) return;
     let restored = 0;
     for (const move of entry.moves) {
-      const file = getFileByPath(this.app, move.toPath);
-      if (!file) continue;
+      const target = this.app.vault.getAbstractFileByPath(move.toPath);
+      if (!target) continue;
       if (this.app.vault.getAbstractFileByPath(move.fromPath)) continue;
       try {
-        await this.app.fileManager.renameFile(file, move.fromPath);
+        await this.app.fileManager.renameFile(target, move.fromPath);
         restored++;
       } catch {
       }
@@ -1713,8 +1831,8 @@ var FolderBoardSettingTab = class extends import_obsidian4.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     new import_obsidian4.Setting(containerEl).setName("\uAE30\uBCF8 \uB808\uC774\uC544\uC6C3").addDropdown(
-      (dd) => dd.addOption("2", "2\uC5F4 \uADF8\uB9AC\uB4DC").addOption("3", "3\uC5F4 \uADF8\uB9AC\uB4DC").addOption("4", "4\uC5F4 \uADF8\uB9AC\uB4DC").addOption("scroll", "\uC138\uB85C \uD3BC\uCE68 (\uAC00\uB85C \uC2A4\uD06C\uB864)").setValue(String(this.plugin.settings.gridCols)).onChange(async (value) => {
-        this.plugin.settings.gridCols = value === "scroll" ? "scroll" : Number(value);
+      (dd) => dd.addOption("2", "2\uC5F4 \uADF8\uB9AC\uB4DC").addOption("3", "3\uC5F4 \uADF8\uB9AC\uB4DC").addOption("4", "4\uC5F4 \uADF8\uB9AC\uB4DC").addOption("auto", "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)").addOption("scroll", "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)").setValue(String(this.plugin.settings.gridCols)).onChange(async (value) => {
+        this.plugin.settings.gridCols = value === "scroll" || value === "auto" ? value : Number(value);
         await this.plugin.saveSettings();
         this.plugin.refreshOpenViews();
       })

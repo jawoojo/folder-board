@@ -103,6 +103,7 @@ export class FolderBoardView extends ItemView {
 
   private markdownComponent: Component | null = null;
   private vaultRefs: EventRef[] = [];
+  private resizeObserver: ResizeObserver | null = null;
   private boundKeydown: (e: KeyboardEvent) => void;
   private boundKeyup: (e: KeyboardEvent) => void;
   private boundWindowBlur: () => void;
@@ -207,6 +208,10 @@ export class FolderBoardView extends ItemView {
     this.contentEl.removeEventListener("drop", this.boundDrop);
     document.removeEventListener("dragend", this.boundDragEnd);
 
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
@@ -260,13 +265,14 @@ export class FolderBoardView extends ItemView {
       this.renderGridAndHeader();
     });
 
-    // [ID 6.5.12] 레이아웃 세그먼트 (2열 / 3열 / 4열 / 세로 펼침 가로 스크롤)
+    // [ID 6.5.12] 레이아웃 세그먼트 (2/3/4열 고정 · 세로 자동 열 · 가로 스크롤 세로 펼침)
     const colGroup = controls.createDiv({ cls: "fb-segmented" });
     const layoutOptions: Array<{ value: LayoutColumns; label: string; aria: string; icon?: string }> = [
       { value: 2, label: "2", aria: "2열 그리드" },
       { value: 3, label: "3", aria: "3열 그리드" },
       { value: 4, label: "4", aria: "4열 그리드" },
-      { value: "scroll", label: "", aria: "세로 펼침 (가로 스크롤)", icon: "columns" }
+      { value: "auto", label: "", aria: "세로 모드 (넓이 자동 맞춤)", icon: "layout-grid" },
+      { value: "scroll", label: "", aria: "가로 모드 (세로 펼침 · 가로 스크롤)", icon: "columns" }
     ];
 
     this.layoutBtns = layoutOptions.map((opt) => {
@@ -321,6 +327,14 @@ export class FolderBoardView extends ItemView {
     const body = this.shellEl.createDiv({ cls: "fb-body" });
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
+
+    // [ID 6.5.19] 세로 자동 모드 창 폭 반응형 행 높이 보정
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.plugin.settings.gridCols === "auto" && this.renderedCards.length > 0) {
+        this.applyGridLayoutClasses(this.renderedCards.length);
+      }
+    });
+    this.resizeObserver.observe(this.canvasEl);
 
     // 가로 스크롤 모드에서 카드 바깥 여백의 세로 휠을 가로 스크롤로 자연스럽게 연결
     this.canvasEl.addEventListener(
@@ -755,21 +769,42 @@ export class FolderBoardView extends ItemView {
     });
   }
 
-  private renderGrid(cards: BoardCardModel[]): void {
-    this.gridEl.empty();
-
+  private applyGridLayoutClasses(cardCount: number): void {
     const prefLayout = this.plugin.settings.gridCols;
     const isScrollMode = prefLayout === "scroll";
     this.canvasEl.toggleClass("is-horizontal-scroll", isScrollMode);
 
     if (isScrollMode) {
       this.gridEl.className = "fb-grid fb-layout-scroll";
+    } else if (prefLayout === "auto") {
+      // [ID 6.5.19] 세로 모드: 현재 폭 기준 예상 열 수를 계산해 1줄이면 세로 100%, 여러 줄이면 위아래 스크롤
+      const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
+      const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
+      const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
+      this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
     } else {
-      const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cards.length)));
-      const rowCount = Math.max(1, Math.ceil(cards.length / effectiveCols));
+      const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
+      const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
       const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
       this.gridEl.className = `fb-grid fb-cols-${effectiveCols} ${rowClass}`;
     }
+  }
+
+  private openContextMenu(e: MouseEvent, target: TAbstractFile): void {
+    e.preventDefault();
+    e.stopPropagation();
+    openNativeFileMenu(this.app, e, target, {
+      leaf: this.leaf,
+      onMutated: () => this.renderAll(),
+      onRequestRename: (file) => this.promptRename(file),
+      onRequestCreateNote: (folderPath) => this.promptCreateNote(folderPath),
+      onRequestCreateFolder: (folderPath) => this.promptCreateFolder(folderPath)
+    });
+  }
+
+  private renderGrid(cards: BoardCardModel[]): void {
+    this.gridEl.empty();
+    this.applyGridLayoutClasses(cards.length);
 
     if (cards.length === 0) {
       this.gridEl.createDiv({ cls: "fb-empty-grid", text: "일치하는 항목이 없습니다" });
@@ -826,19 +861,13 @@ export class FolderBoardView extends ItemView {
         });
 
         headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
-        headerEl.addEventListener("contextmenu", (e) => {
-          const folder = getFolderByPath(this.app, cardModel.folderPath);
-          if (!folder) return;
-          e.preventDefault();
-          openNativeFileMenu(
-            this.app,
-            e,
-            folder,
-            () => this.renderAll(),
-            (target) => this.promptRename(target)
-          );
-        });
       }
+
+      // [ID 6.5.20] 루트 카드 포함 모든 카드 헤더 및 빈 영역 우클릭 -> 네이티브 생성 메뉴(새 노트/폴더/캔버스/베이스 등) 호출
+      headerEl.addEventListener("contextmenu", (e) => {
+        const folder = getFolderByPath(this.app, cardModel.folderPath);
+        if (folder) this.openContextMenu(e, folder);
+      });
 
       headerEl.addEventListener("click", () => {
         this.selectedPaths.clear();
@@ -860,8 +889,13 @@ export class FolderBoardView extends ItemView {
         }
       });
 
-      // 네이티브 탐색기 본문
+      // 네이티브 탐색기 본문 (빈 공간 우클릭 시 해당 카드 폴더의 네이티브 생성 메뉴 표시)
       const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
+      listEl.addEventListener("contextmenu", (e) => {
+        if ((e.target as HTMLElement | null)?.closest(".fb-row")) return;
+        const folder = getFolderByPath(this.app, cardModel.folderPath);
+        if (folder) this.openContextMenu(e, folder);
+      });
 
       if (cardModel.items.length === 0) {
         listEl.createDiv({ cls: "fb-empty-card", text: "비어 있음" });
@@ -872,18 +906,22 @@ export class FolderBoardView extends ItemView {
         const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
 
         if (item.type === "folder") {
+          const isSelected = this.selectedPaths.has(item.path);
           const isCarryFolder =
             isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === item.path;
           const row = listEl.createDiv({
             cls:
               "tree-item-self is-clickable nav-folder-title fb-row" +
+              (isSelected ? " is-selected" : "") +
               (isFocused ? " is-focused" : "") +
               (isCarryFolder ? " is-carry-target" : ""),
             attr: {
               "data-path": item.path,
+              "data-drag-path": item.path,
               "data-drop-folder": item.path,
               "data-item-key": item.key,
-              "data-card-index": String(cardIdx)
+              "data-card-index": String(cardIdx),
+              draggable: "true"
             }
           });
           row.style.paddingLeft = `${8 + item.depth * 14}px`;
@@ -903,6 +941,23 @@ export class FolderBoardView extends ItemView {
 
           row.addEventListener("click", async (e) => {
             e.stopPropagation();
+            if (e.shiftKey && cardIdx === this.focusedCardIndex) {
+              const anchor = this.selectionAnchorIndex ?? this.findFocusedCardAndIndex().itemIndex;
+              const safeAnchor = anchor >= 0 ? anchor : itemIdx;
+              this.selectionAnchorIndex = safeAnchor;
+              this.selectRangeInCard(cardIdx, safeAnchor, itemIdx);
+              return;
+            }
+            if (e.metaKey || e.ctrlKey) {
+              this.focusedCardIndex = cardIdx;
+              this.focusedItemKey = item.key;
+              this.selectionAnchorIndex = itemIdx;
+              if (this.selectedPaths.has(item.path)) this.selectedPaths.delete(item.path);
+              else this.selectedPaths.add(item.path);
+              this.syncFocusAndSelectionDOM();
+              this.renderSelectionBar();
+              return;
+            }
             this.focusedCardIndex = cardIdx;
             this.focusedItemKey = item.key;
             this.selectedPaths.clear();
@@ -918,16 +973,9 @@ export class FolderBoardView extends ItemView {
 
           row.addEventListener("contextmenu", (e) => {
             const folder = getFolderByPath(this.app, item.path);
-            if (!folder) return;
-            e.preventDefault();
-            openNativeFileMenu(
-              this.app,
-              e,
-              folder,
-              () => this.renderAll(),
-              (target) => this.promptRename(target)
-            );
+            if (folder) this.openContextMenu(e, folder);
           });
+          row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
         } else {
           const isSelected = this.selectedPaths.has(item.path);
           const row = listEl.createDiv({
@@ -956,15 +1004,7 @@ export class FolderBoardView extends ItemView {
           });
           row.addEventListener("contextmenu", (e) => {
             const file = getFileByPath(this.app, item.path);
-            if (!file) return;
-            e.preventDefault();
-            openNativeFileMenu(
-              this.app,
-              e,
-              file,
-              () => this.renderAll(),
-              (target) => this.promptRename(target)
-            );
+            if (file) this.openContextMenu(e, file);
           });
           row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
         }
@@ -973,7 +1013,7 @@ export class FolderBoardView extends ItemView {
   }
 
   private renderShelf(): void {
-    this.shelfPaths = this.shelfPaths.filter((p) => getFileByPath(this.app, p) !== null);
+    this.shelfPaths = this.shelfPaths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null);
     const hasItems = this.shelfPaths.length > 0;
     const shouldShow = hasItems || this.isDragging;
 
@@ -987,13 +1027,14 @@ export class FolderBoardView extends ItemView {
     }
 
     for (const path of this.shelfPaths) {
-      const file = getFileByPath(this.app, path);
-      if (!file) continue;
+      const abs = this.app.vault.getAbstractFileByPath(path);
+      if (!abs) continue;
       const chip = this.shelfListEl.createDiv({
         cls: "fb-shelf-chip",
         attr: { draggable: "true", "data-drag-path": path }
       });
-      chip.createSpan({ text: file.extension === "md" ? file.basename : file.name });
+      const label = abs instanceof TFile && abs.extension === "md" ? abs.basename : abs.name;
+      chip.createSpan({ text: label });
       const rm = chip.createEl("button", { cls: "clickable-icon fb-shelf-chip-rm" });
       setIcon(rm, "x");
       rm.addEventListener("click", (e) => {
@@ -1158,7 +1199,7 @@ export class FolderBoardView extends ItemView {
     this.selectedPaths.clear();
     for (let i = start; i <= end; i++) {
       const it = card.items[i];
-      if (it.type === "file") this.selectedPaths.add(it.path);
+      this.selectedPaths.add(it.path);
     }
 
     const safeTarget = Math.max(0, Math.min(targetIdx, card.items.length - 1));
@@ -1268,39 +1309,102 @@ export class FolderBoardView extends ItemView {
   }
 
   // =========================================================
-  // Cmd + 방향키 들고 이동 (Carry Mode)
+  // [ID 6.5.21] Cmd/Ctrl + 방향키 들고 이동 (파일 + 폴더 지원 · 현재 위치 기준 바로 위/아래 폴더 타겟팅)
+  // -> 위/아래 키 첫 입력 시 카드 최상단부터 다시 내려가지 않고, 현재 포커싱 위치 바로 위/아래 폴더로 즉시 점프함.
   // =========================================================
+  private isInvalidDropDest(destPath: string, movingPaths: string[]): boolean {
+    const normDest = normalizeFolderStr(destPath);
+    return movingPaths.some((src) => {
+      const normSrc = normalizeFolderStr(src);
+      if (!normSrc) return true;
+      return normDest === normSrc || normDest.startsWith(`${normSrc}/`);
+    });
+  }
+
+  private resolveCarrySourcePaths(): string[] {
+    if (this.selectedPaths.size > 0) {
+      return [...this.selectedPaths];
+    }
+    const curCard = this.renderedCards[this.focusedCardIndex];
+    if (this.focusedItemKey === CARD_HEADER_KEY && curCard && !curCard.isRootCard) {
+      return [curCard.folderPath];
+    }
+    if (this.focusedItemKey?.startsWith("folder:")) {
+      const p = normalizeFolderStr(this.focusedItemKey.slice(7));
+      return p ? [p] : [];
+    }
+    if (this.focusedItemKey?.startsWith("file:")) {
+      const f = getFileByPath(this.app, this.focusedItemKey.slice(5));
+      return f ? [f.path] : [];
+    }
+    return [];
+  }
+
+  private getValidFolderTargetsInCard(card: BoardCardModel): Array<{ path: string; pos: number }> {
+    const targets: Array<{ path: string; pos: number }> = [];
+    if (!this.isInvalidDropDest(card.folderPath, this.carryPaths)) {
+      targets.push({ path: card.folderPath, pos: -1 });
+    }
+    card.items.forEach((it, idx) => {
+      if (it.type === "folder" && !this.isInvalidDropDest(it.path, this.carryPaths)) {
+        targets.push({ path: it.path, pos: idx });
+      }
+    });
+    return targets;
+  }
+
   private beginOrStepCarry(direction: "left" | "right" | "up" | "down"): void {
     if (this.renderedCards.length === 0) return;
 
-    if (this.carryPaths.length === 0) {
-      if (this.selectedPaths.size > 0) {
-        this.carryPaths = [...this.selectedPaths];
-      } else {
-        const focusedFile = this.getFocusedFile();
-        if (!focusedFile) return;
-        this.carryPaths = [focusedFile.path];
-      }
+    const justStarted = this.carryPaths.length === 0;
+    if (justStarted) {
+      const sources = this.resolveCarrySourcePaths();
+      if (sources.length === 0) return;
+      this.carryPaths = sources;
       this.carryCardIndex = this.focusedCardIndex;
-      this.carryTargetFolderPath = this.renderedCards[this.carryCardIndex]?.folderPath ?? this.currentFolderPath;
+      this.carryTargetFolderPath = null;
     }
 
     if (direction === "left" || direction === "right") {
       const delta = direction === "right" ? 1 : -1;
-      this.carryCardIndex = (this.carryCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
-      this.carryTargetFolderPath = this.renderedCards[this.carryCardIndex].folderPath;
+      const total = this.renderedCards.length;
+      for (let step = 1; step <= total; step++) {
+        const candidateIdx = (this.carryCardIndex + delta * step + total) % total;
+        const candidatePath = this.renderedCards[candidateIdx].folderPath;
+        if (!this.isInvalidDropDest(candidatePath, this.carryPaths)) {
+          this.carryCardIndex = candidateIdx;
+          this.carryTargetFolderPath = candidatePath;
+          break;
+        }
+      }
     } else {
-      // Cmd + ↑/↓: 현재 대상 카드 내 직속 + 펼쳐진 하위 폴더 사이를 순회하며 정밀 드롭 지정
       const card = this.renderedCards[this.carryCardIndex];
       if (!card) return;
-      const folderTargets: string[] = [
-        card.folderPath,
-        ...card.items.filter((it) => it.type === "folder").map((it) => it.path)
-      ];
-      const curIdx = folderTargets.indexOf(this.carryTargetFolderPath ?? card.folderPath);
-      const delta = direction === "down" ? 1 : -1;
-      const nextIdx = Math.max(0, Math.min((curIdx === -1 ? 0 : curIdx) + delta, folderTargets.length - 1));
-      this.carryTargetFolderPath = folderTargets[nextIdx];
+      const targets = this.getValidFolderTargetsInCard(card);
+      if (targets.length === 0) return;
+
+      if (justStarted) {
+        // 첫 입력: 현재 포커스 위치(originPos) 기준으로 바로 위 또는 바로 아래 폴더로 즉시 포커스
+        const originPos =
+          this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+
+        if (direction === "up") {
+          const above = targets.filter((t) => t.pos < originPos);
+          this.carryTargetFolderPath =
+            above.length > 0 ? above[above.length - 1].path : targets[targets.length - 1].path;
+        } else {
+          const below = targets.filter((t) => t.pos > originPos);
+          this.carryTargetFolderPath = below.length > 0 ? below[0].path : targets[0].path;
+        }
+      } else {
+        const curIdx = targets.findIndex((t) => t.path === this.carryTargetFolderPath);
+        const delta = direction === "down" ? 1 : -1;
+        const nextIdx =
+          curIdx === -1
+            ? 0
+            : (curIdx + delta + targets.length) % targets.length;
+        this.carryTargetFolderPath = targets[nextIdx].path;
+      }
     }
 
     this.syncFocusAndSelectionDOM();
@@ -1333,10 +1437,13 @@ export class FolderBoardView extends ItemView {
   }
 
   // =========================================================
-  // 포커스된 폴더에 노트/폴더 생성 & 이름 변경
+  // 포커스된 폴더(또는 우클릭 지정 폴더)에 노트/폴더 생성 & 이름 변경
   // =========================================================
-  private promptCreateNote(): void {
-    const targetFolderPath = this.getFocusedTargetFolderPath();
+  private promptCreateNote(explicitFolderPath?: string): void {
+    const targetFolderPath =
+      explicitFolderPath !== undefined
+        ? normalizeFolderStr(explicitFolderPath)
+        : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
 
@@ -1376,8 +1483,11 @@ export class FolderBoardView extends ItemView {
     modal.open();
   }
 
-  private promptCreateFolder(): void {
-    const targetFolderPath = this.getFocusedTargetFolderPath();
+  private promptCreateFolder(explicitFolderPath?: string): void {
+    const targetFolderPath =
+      explicitFolderPath !== undefined
+        ? normalizeFolderStr(explicitFolderPath)
+        : this.getFocusedTargetFolderPath();
     const destLabel = targetFolderPath || this.app.vault.getName();
     this.isSubModalOpen = true;
 
@@ -1473,11 +1583,11 @@ export class FolderBoardView extends ItemView {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify(this.activeDragPaths));
 
-    const firstFile = getFileByPath(this.app, this.activeDragPaths[0]);
-    const label = firstFile
-      ? firstFile.extension === "md"
-        ? firstFile.basename
-        : firstFile.name
+    const firstItem = this.app.vault.getAbstractFileByPath(this.activeDragPaths[0]);
+    const label = firstItem
+      ? firstItem instanceof TFile && firstItem.extension === "md"
+        ? firstItem.basename
+        : firstItem.name
       : path;
     const ghost = document.body.createDiv({
       cls: "fb-drag-ghost",
@@ -1557,33 +1667,43 @@ export class FolderBoardView extends ItemView {
 
   private addPathsToShelf(paths: string[]): void {
     for (const p of paths) {
-      if (getFileByPath(this.app, p) && !this.shelfPaths.includes(p)) {
+      if (this.app.vault.getAbstractFileByPath(p) && !this.shelfPaths.includes(p)) {
         this.shelfPaths.push(p);
       }
     }
     this.renderShelf();
   }
 
+  // [ID 6.5.22] 파일 및 폴더 통합 이동 + 순환 이동(자기 자신/하위로 이동) 방어 + Undo
   private async moveFiles(sourcePaths: string[], rawDestFolderPath: string): Promise<void> {
     const destFolderPath = normalizeFolderStr(rawDestFolderPath);
     const unique = [...new Set(sourcePaths)];
     const moves: MoveUndoEntry["moves"] = [];
     let skipped = 0;
+    let firstMovedType: "file" | "folder" = "file";
 
     for (const srcPath of unique) {
-      const file = getFileByPath(this.app, srcPath);
-      if (!file) continue;
-      const currentParent = normalizeFolderRef(file.parent);
+      const target = this.app.vault.getAbstractFileByPath(srcPath);
+      if (!target) continue;
+      if (target instanceof TFolder && this.isInvalidDropDest(destFolderPath, [target.path])) {
+        skipped++;
+        continue;
+      }
+
+      const currentParent = normalizeFolderRef(target.parent);
       if (currentParent === destFolderPath) continue;
 
-      const destPath = normalizePath(destFolderPath ? `${destFolderPath}/${file.name}` : file.name);
+      const destPath = normalizePath(destFolderPath ? `${destFolderPath}/${target.name}` : target.name);
       if (this.app.vault.getAbstractFileByPath(destPath)) {
         skipped++;
         continue;
       }
 
       try {
-        await this.app.fileManager.renameFile(file, destPath);
+        await this.app.fileManager.renameFile(target, destPath);
+        if (moves.length === 0) {
+          firstMovedType = target instanceof TFolder ? "folder" : "file";
+        }
         moves.push({ fromPath: srcPath, toPath: destPath });
       } catch {
         skipped++;
@@ -1598,14 +1718,14 @@ export class FolderBoardView extends ItemView {
       this.shelfPaths = this.shelfPaths.filter((p) => !movedSources.has(p));
       this.selectedPaths.clear();
       this.selectionAnchorIndex = null;
-      this.focusedItemKey = `file:${moves[0].toPath}`;
+      this.focusedItemKey = `${firstMovedType}:${moves[0].toPath}`;
 
       const destName = destFolderPath || this.app.vault.getName();
       new Notice(`${moves.length}개 항목을 '${destName}'로 이동했습니다.`);
       this.renderAll();
       this.scrollFocusedIntoView();
     } else if (skipped > 0) {
-      new Notice("대상 폴더에 같은 이름의 파일이 있어 이동하지 못했습니다.");
+      new Notice("대상 폴더에 같은 이름이 있거나 이동할 수 없는 경로입니다.");
     } else {
       this.syncFocusAndSelectionDOM();
     }
@@ -1617,11 +1737,11 @@ export class FolderBoardView extends ItemView {
 
     let restored = 0;
     for (const move of entry.moves) {
-      const file = getFileByPath(this.app, move.toPath);
-      if (!file) continue;
+      const target = this.app.vault.getAbstractFileByPath(move.toPath);
+      if (!target) continue;
       if (this.app.vault.getAbstractFileByPath(move.fromPath)) continue;
       try {
-        await this.app.fileManager.renameFile(file, move.fromPath);
+        await this.app.fileManager.renameFile(target, move.fromPath);
         restored++;
       } catch {
         // 복원 실패 항목 건너뜀

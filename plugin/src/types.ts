@@ -1,9 +1,9 @@
 // [ID 6.1] Folder Board 플러그인 공용 타입 및 기본 설정
-// -> 열 개수(2/3/4열 그리드 또는 가로 스크롤 세로 펼침), 정렬, 노트 열기 방식, 영속 폴더 펼침 상태를 정의함.
+// -> 2/3/4열 고정 그리드, 세로 자동 열(auto), 세로 펼침 가로 스크롤(scroll) 및 영속 폴더 펼침 상태를 정의함.
 
 export type SortMode = "name" | "mtime";
 export type OpenBehavior = "same-tab" | "new-tab";
-export type LayoutColumns = 2 | 3 | 4 | "scroll";
+export type LayoutColumns = 2 | 3 | 4 | "auto" | "scroll";
 
 export interface FolderBoardSettings {
   gridCols: LayoutColumns;
