@@ -83,7 +83,11 @@ export class FolderBoardView extends ItemView {
   private currentDropEl: HTMLElement | null = null;
   private isDragging = false;
   private isSubModalOpen = false;
+  private isInlineRenaming = false;
   private renderedSortIcon: string | null = null;
+  // [ID 6.5.36] viewScope와 window capture 간 중복 실행 방지용 이벤트 추적기
+  // -> e.defaultPrevented 대신 WeakSet을 사용해 옵시디언 기본 핫키(Cmd+D 등)가 preventDefault()를 걸어도 보드 동작이 정상 실행되게 함.
+  private handledKeyEvents = new WeakSet<KeyboardEvent>();
 
   // DOM 레퍼런스
   private shellEl!: HTMLElement;
@@ -218,6 +222,7 @@ export class FolderBoardView extends ItemView {
 
     // Cmd/Ctrl + F: 보드 검색창 포커스
     registerModAndCtrl(["f", "ㄹ"], (evt) => {
+      this.handledKeyEvents.add(evt);
       evt.preventDefault();
       evt.stopImmediatePropagation();
       this.focusSearchBox();
@@ -227,18 +232,10 @@ export class FolderBoardView extends ItemView {
     // Cmd/Ctrl + A: 현재 카드 전체 선택
     registerModAndCtrl(["a", "ㅁ"], (evt) => {
       if (this.isInputFocused()) return true;
+      this.handledKeyEvents.add(evt);
       evt.preventDefault();
       evt.stopImmediatePropagation();
       this.selectAllInFocusedCard();
-      return false;
-    });
-
-    // Cmd/Ctrl + D: 현재 포커스 파일/폴더 제자리 즉시 복제
-    registerModAndCtrl(["d", "ㅇ"], (evt) => {
-      if (this.isInputFocused()) return true;
-      evt.preventDefault();
-      evt.stopImmediatePropagation();
-      void this.duplicateFocusedItem();
       return false;
     });
 
@@ -246,6 +243,7 @@ export class FolderBoardView extends ItemView {
     registerModAndCtrl(["c", "ㅊ"], (evt) => {
       if (this.isInputFocused() || this.hasSelectedText()) return true;
       if (this.copySelectedOrFocused()) {
+        this.handledKeyEvents.add(evt);
         evt.preventDefault();
         evt.stopImmediatePropagation();
         return false;
@@ -257,6 +255,7 @@ export class FolderBoardView extends ItemView {
     registerModAndCtrl(["x", "ㅌ"], (evt) => {
       if (this.isInputFocused() || this.hasSelectedText()) return true;
       if (this.cutSelectedOrFocused()) {
+        this.handledKeyEvents.add(evt);
         evt.preventDefault();
         evt.stopImmediatePropagation();
         return false;
@@ -268,6 +267,7 @@ export class FolderBoardView extends ItemView {
     registerModAndCtrl(["v", "ㅍ"], (evt) => {
       if (this.isInputFocused()) return true;
       if (this.clipboardPaths.length > 0 && this.clipboardMode) {
+        this.handledKeyEvents.add(evt);
         evt.preventDefault();
         evt.stopImmediatePropagation();
         void this.pasteClipboardToFocusedFolder();
@@ -282,6 +282,7 @@ export class FolderBoardView extends ItemView {
   private syncScopeState(): void {
     const shouldBeActive =
       !this.isSubModalOpen &&
+      !this.isInlineRenaming &&
       !document.querySelector(".modal-container") &&
       this.app.workspace.getActiveViewOfType(FolderBoardView) === this;
 
@@ -314,7 +315,12 @@ export class FolderBoardView extends ItemView {
     }
 
     this.syncScopeState();
-    requestAnimationFrame(() => this.shellEl?.focus());
+    // 리로드 직후 이미 활성 탭인 경우 active-leaf-change가 안 뜰 수 있으므로 layoutReady 시점에도 한 번 더 동기화
+    this.app.workspace.onLayoutReady(() => this.syncScopeState());
+    requestAnimationFrame(() => {
+      this.shellEl?.focus();
+      this.syncScopeState();
+    });
   }
 
   async onClose(): Promise<void> {
@@ -349,6 +355,8 @@ export class FolderBoardView extends ItemView {
       cls: "fb-shell",
       attr: { tabindex: "-1" }
     });
+    this.shellEl.addEventListener("mousedown", () => this.syncScopeState());
+    this.shellEl.addEventListener("focusin", () => this.syncScopeState());
 
     // 상단 미니멀 툴바
     const header = this.shellEl.createDiv({ cls: "fb-header" });
@@ -1711,7 +1719,135 @@ export class FolderBoardView extends ItemView {
     modal.open();
   }
 
+  // [ID 6.5.37] 네이티브 탐색기 스타일 인라인(제자리) 이름 바꾸기
+  // -> 별도 모달 없이 해당 행/카드 헤더의 텍스트 노드만 <input>으로 교체해 시선 이동과 지연을 제거함.
+  // -> 한글 조합(isComposing) 보호, 금지 문자 방어, 드래그 충돌 방지를 함께 처리함.
+  private startInlineRename(target: TAbstractFile): void {
+    if (target instanceof TFolder && target.isRoot()) return;
+    if (this.isInlineRenaming) return;
+
+    const targetPath = target.path;
+    let hostEl: HTMLElement | null = null;
+    let titleEl: HTMLElement | null = null;
+    let isCardHeader = false;
+
+    // 1) 카드 내부 행(.fb-row) 우선 탐색
+    const rows = Array.from(this.gridEl.querySelectorAll<HTMLElement>(".fb-row"));
+    const matchedRow = rows.find((el) => el.dataset.path === targetPath);
+    if (matchedRow) {
+      hostEl = matchedRow;
+      titleEl = matchedRow.querySelector<HTMLElement>(".tree-item-inner");
+    }
+
+    // 2) 행이 없으면 폴더 카드 헤더(.fb-card) 탐색
+    if (!titleEl && target instanceof TFolder) {
+      const cards = Array.from(this.gridEl.querySelectorAll<HTMLElement>(".fb-card:not(.is-root-card)"));
+      const matchedCard = cards.find((el) => normalizeFolderStr(el.dataset.dropFolder) === normalizeFolderStr(targetPath));
+      if (matchedCard) {
+        hostEl = matchedCard.querySelector<HTMLElement>(".fb-card-header");
+        titleEl = matchedCard.querySelector<HTMLElement>(".fb-card-title");
+        isCardHeader = true;
+      }
+    }
+
+    if (!hostEl || !titleEl) {
+      this.promptRenameModalFallback(target);
+      return;
+    }
+
+    const isMd = target instanceof TFile && target.extension === "md";
+    const initialValue = isMd ? target.basename : target.name;
+    const prevDraggable = hostEl.getAttribute("draggable");
+    hostEl.setAttribute("draggable", "false");
+
+    this.isInlineRenaming = true;
+    this.syncScopeState();
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "fb-inline-rename-input";
+    input.value = initialValue;
+
+    titleEl.addClass("is-hidden");
+    titleEl.insertAdjacentElement("afterend", input);
+
+    let finished = false;
+    const cleanup = () => {
+      if (finished) return false;
+      finished = true;
+      input.remove();
+      titleEl?.removeClass("is-hidden");
+      if (prevDraggable !== null) hostEl?.setAttribute("draggable", prevDraggable);
+      else hostEl?.removeAttribute("draggable");
+      this.isInlineRenaming = false;
+      this.syncScopeState();
+      requestAnimationFrame(() => this.shellEl?.focus());
+      return true;
+    };
+
+    const commit = async () => {
+      const rawName = input.value.trim();
+      if (!cleanup()) return;
+      if (!rawName) return;
+
+      if (/[\\/:*?"<>|]/.test(rawName)) {
+        new Notice("파일/폴더 이름에 사용할 수 없는 문자가 포함되어 있습니다.");
+        return;
+      }
+
+      const finalName = isMd && !rawName.endsWith(".md") ? `${rawName}.md` : rawName;
+      const parentPath = normalizeFolderRef(target.parent);
+      const destPath = normalizePath(parentPath ? `${parentPath}/${finalName}` : finalName);
+      if (destPath === target.path) return;
+      if (this.app.vault.getAbstractFileByPath(destPath)) {
+        new Notice("같은 이름이 이미 존재합니다.");
+        return;
+      }
+
+      try {
+        await this.app.fileManager.renameFile(target, destPath);
+        if (!isCardHeader) {
+          this.focusedItemKey = target instanceof TFolder ? `folder:${destPath}` : `file:${destPath}`;
+        }
+        this.renderAll();
+        this.scrollFocusedIntoView();
+      } catch (err) {
+        new Notice(`이름 변경 실패: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+
+    const cancel = () => {
+      cleanup();
+    };
+
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        void commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancel();
+      }
+    });
+    input.addEventListener("blur", () => {
+      void commit();
+    });
+
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
   private promptRename(target: TAbstractFile): void {
+    this.startInlineRename(target);
+  }
+
+  private promptRenameModalFallback(target: TAbstractFile): void {
     const isMd = target instanceof TFile && target.extension === "md";
     const initial = isMd ? target.basename : target.name;
     this.isSubModalOpen = true;
@@ -1916,28 +2052,6 @@ export class FolderBoardView extends ItemView {
       new Notice(`${copiedCount}개 항목을 '${destName}'에 복사했습니다.`);
       this.renderAll();
       this.scrollFocusedIntoView();
-    }
-  }
-
-  private async duplicateFocusedItem(): Promise<void> {
-    const target = this.getFocusedAbstractTarget();
-    if (!target || (target instanceof TFolder && target.isRoot())) return;
-
-    const parentPath = normalizeFolderRef(target.parent);
-    const destPath = this.buildUniqueCopyPath(parentPath, target, true);
-    if (!destPath) return;
-
-    try {
-      const copied = await this.copyAbstractItem(target, destPath);
-      this.selectedPaths.clear();
-      this.selectionAnchorIndex = null;
-      this.focusedItemKey = copied instanceof TFolder ? `folder:${copied.path}` : `file:${copied.path}`;
-      const displayName = copied instanceof TFile && copied.extension === "md" ? copied.basename : copied.name;
-      new Notice(`'${displayName}' 복제 완료`);
-      this.renderAll();
-      this.scrollFocusedIntoView();
-    } catch (err) {
-      new Notice(`복제 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -2299,7 +2413,7 @@ export class FolderBoardView extends ItemView {
   // 키보드 2D 탐색 · Shift 다중 선택 · Option 들고 이동 · Cmd 점프 & X/V
   // =========================================================
   private isViewActive(): boolean {
-    if (this.isSubModalOpen) return false;
+    if (this.isSubModalOpen || this.isInlineRenaming) return false;
     if (document.querySelector(".modal-container")) return false;
     return this.app.workspace.getActiveViewOfType(FolderBoardView) === this;
   }
@@ -2360,7 +2474,7 @@ export class FolderBoardView extends ItemView {
   }
 
   private handleKeydown(e: KeyboardEvent): void {
-    if (e.defaultPrevented) return;
+    if (this.handledKeyEvents.has(e)) return;
     if (!this.isViewActive()) return;
     const meta = e.metaKey || e.ctrlKey;
     const code = e.code;
@@ -2435,14 +2549,6 @@ export class FolderBoardView extends ItemView {
       e.preventDefault();
       e.stopPropagation();
       this.selectAllInFocusedCard();
-      return;
-    }
-
-    // Cmd/Ctrl + D: 포커스된 파일/폴더 그 자리에서 즉시 복제
-    if (meta && !e.shiftKey && !e.altKey && code === "KeyD") {
-      e.preventDefault();
-      e.stopPropagation();
-      void this.duplicateFocusedItem();
       return;
     }
 
