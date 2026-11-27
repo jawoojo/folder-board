@@ -2258,6 +2258,15 @@ export class FolderBoardView extends ItemView {
     return [];
   }
 
+  private isAllSourcesAlreadyInFolder(destPath: string): boolean {
+    const normDest = normalizeFolderStr(destPath);
+    if (this.carryPaths.length === 0) return false;
+    return this.carryPaths.every((p) => {
+      const abs = this.app.vault.getAbstractFileByPath(p);
+      return abs?.parent ? normalizeFolderRef(abs.parent) === normDest : false;
+    });
+  }
+
   private getValidFolderTargetsInCard(card: BoardCardModel): Array<{ path: string; pos: number }> {
     const targets: Array<{ path: string; pos: number }> = [];
     if (!this.isInvalidDropDest(card.folderPath, this.carryPaths)) {
@@ -2271,6 +2280,8 @@ export class FolderBoardView extends ItemView {
     return targets;
   }
 
+  // [ID 6.5.57] Option(Alt)+방향키 들고 이동 (전역 수직 순회 + 2D 공간 좌/우 이동 통합)
+  // -> 위/아래 이동 시 현재 카드 내부에 갇히지 않고 카드 경계를 넘어 위·아래의 모든 폴더/하위 폴더로 자연스럽게 이동함.
   private beginOrStepCarry(direction: "left" | "right" | "up" | "down"): void {
     if (this.renderedCards.length === 0) return;
 
@@ -2286,14 +2297,12 @@ export class FolderBoardView extends ItemView {
       this.carryAnchorY = anchorRect ? anchorRect.top + anchorRect.height / 2 : null;
     }
 
+    const mode = this.plugin.settings.gridCols;
+
     if (direction === "left" || direction === "right") {
       let spatialHandled = false;
-      if (
-        this.plugin.settings.gridCols === "flow" &&
-        this.carryAnchorX !== null &&
-        this.carryAnchorY !== null
-      ) {
-        // [ID 6.5.49] 여러줄 모드 Option+좌/우 들고 이동 -> 현재 파일 행의 실제 세로 위치(carryAnchorY)에 인접한 옆 열 폴더를 직관 타겟팅
+      if (mode === "flow" && this.carryAnchorX !== null && this.carryAnchorY !== null) {
+        // [ID 6.5.49] 여러줄 모드 Option+좌/우 들고 이동 -> 현재 파일/타겟 행의 실제 세로 위치(carryAnchorY)에 인접한 옆 열 폴더 타겟팅
         const excludePath = justStarted
           ? normalizeFolderStr(this.renderedCards[this.focusedCardIndex]?.folderPath)
           : this.carryTargetFolderPath !== null
@@ -2326,36 +2335,121 @@ export class FolderBoardView extends ItemView {
           }
         }
       }
+    } else if (mode === "flow") {
+      // 여러줄 모드 위/아래: 전체 보드의 모든 폴더·하위 폴더를 위→아래 흐름대로 끊김 없이 순회
+      const allTargets: Array<{ cardIdx: number; path: string; pos: number }> = [];
+      this.renderedCards.forEach((card, cardIdx) => {
+        for (const t of this.getValidFolderTargetsInCard(card)) {
+          allTargets.push({ cardIdx, path: t.path, pos: t.pos });
+        }
+      });
+      if (allTargets.length === 0) return;
+
+      let chosen: { cardIdx: number; path: string; pos: number } | null = null;
+      if (justStarted) {
+        const originCard = this.focusedCardIndex;
+        const originPos =
+          this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+        const nonSameParent = (t: { path: string }) => !this.isAllSourcesAlreadyInFolder(t.path);
+        const candidates = allTargets.filter(nonSameParent);
+        const pool = candidates.length > 0 ? candidates : allTargets;
+
+        if (direction === "up") {
+          const before = pool.filter(
+            (t) => t.cardIdx < originCard || (t.cardIdx === originCard && t.pos < originPos)
+          );
+          chosen = before.length > 0 ? before[before.length - 1] : pool[pool.length - 1];
+        } else {
+          const after = pool.filter(
+            (t) => t.cardIdx > originCard || (t.cardIdx === originCard && t.pos > originPos)
+          );
+          chosen = after.length > 0 ? after[0] : pool[0];
+        }
+      } else {
+        const curFlatIdx = allTargets.findIndex(
+          (t) => t.cardIdx === this.carryCardIndex && t.path === this.carryTargetFolderPath
+        );
+        const delta = direction === "down" ? 1 : -1;
+        const nextFlatIdx =
+          curFlatIdx === -1 ? 0 : (curFlatIdx + delta + allTargets.length) % allTargets.length;
+        chosen = allTargets[nextFlatIdx];
+      }
+
+      if (chosen) {
+        this.carryCardIndex = chosen.cardIdx;
+        this.carryTargetFolderPath = chosen.path;
+        if (chosen.pos >= 0) {
+          this.ensureFlowWindowIncludes(chosen.cardIdx, chosen.pos);
+        }
+      }
     } else {
+      // 2D 그리드·세로·가로 모드 위/아래: 현재 카드 내부 폴더 순회 후 경계 도달 시 위/아래 행 카드로 자연스럽게 연결
       const card = this.renderedCards[this.carryCardIndex];
       if (!card) return;
       const targets = this.getValidFolderTargetsInCard(card);
       if (targets.length === 0) return;
 
+      const stepToVerticalNeighborCard = (dir: "up" | "down"): boolean => {
+        if (mode === "scroll") return false;
+        let probeIdx = this.carryCardIndex;
+        for (let guard = 0; guard < this.renderedCards.length; guard++) {
+          const neighborIdx = this.findVerticalNeighborCard(probeIdx, dir);
+          if (neighborIdx < 0) break;
+          const neighborTargets = this.getValidFolderTargetsInCard(this.renderedCards[neighborIdx]);
+          if (neighborTargets.length > 0) {
+            this.carryCardIndex = neighborIdx;
+            this.carryTargetFolderPath =
+              dir === "up"
+                ? neighborTargets[neighborTargets.length - 1].path
+                : neighborTargets[0].path;
+            return true;
+          }
+          probeIdx = neighborIdx;
+        }
+        return false;
+      };
+
       if (justStarted) {
-        // 첫 입력: 현재 포커스 위치(originPos) 기준으로 바로 위 또는 바로 아래 폴더로 즉시 포커스
         const originPos =
           this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+        const filtered = targets.filter((t) => !this.isAllSourcesAlreadyInFolder(t.path));
 
         if (direction === "up") {
-          const above = targets.filter((t) => t.pos < originPos);
-          this.carryTargetFolderPath =
-            above.length > 0 ? above[above.length - 1].path : targets[targets.length - 1].path;
+          const above = filtered.filter((t) => t.pos < originPos);
+          if (above.length > 0) {
+            this.carryTargetFolderPath = above[above.length - 1].path;
+          } else if (!stepToVerticalNeighborCard("up")) {
+            this.carryTargetFolderPath =
+              filtered.length > 0 ? filtered[filtered.length - 1].path : targets[targets.length - 1].path;
+          }
         } else {
-          const below = targets.filter((t) => t.pos > originPos);
-          this.carryTargetFolderPath = below.length > 0 ? below[0].path : targets[0].path;
+          const below = filtered.filter((t) => t.pos > originPos);
+          if (below.length > 0) {
+            this.carryTargetFolderPath = below[0].path;
+          } else if (!stepToVerticalNeighborCard("down")) {
+            this.carryTargetFolderPath = filtered.length > 0 ? filtered[0].path : targets[0].path;
+          }
         }
       } else {
         const curIdx = targets.findIndex((t) => t.path === this.carryTargetFolderPath);
-        const delta = direction === "down" ? 1 : -1;
-        const nextIdx =
-          curIdx === -1
-            ? 0
-            : (curIdx + delta + targets.length) % targets.length;
-        this.carryTargetFolderPath = targets[nextIdx].path;
+        if (direction === "down") {
+          if (curIdx >= 0 && curIdx < targets.length - 1) {
+            this.carryTargetFolderPath = targets[curIdx + 1].path;
+          } else if (!stepToVerticalNeighborCard("down")) {
+            this.carryTargetFolderPath = targets[0].path;
+          }
+        } else {
+          if (curIdx > 0) {
+            this.carryTargetFolderPath = targets[curIdx - 1].path;
+          } else if (!stepToVerticalNeighborCard("up")) {
+            this.carryTargetFolderPath = targets[targets.length - 1].path;
+          }
+        }
       }
+    }
 
-      // 세로로 폴더 타겟을 바꿨으면 다음 좌/우 이동의 기준 높이도 새 타겟에 맞춤
+    // 세로로 폴더 타겟을 바꿨으면 다음 좌/우 이동의 기준 좌표도 새 타겟 위치에 맞춤
+    if (direction === "up" || direction === "down") {
       const targetEl =
         this.gridEl.querySelector<HTMLElement>(
           `.fb-row[data-card-index="${this.carryCardIndex}"][data-drop-folder="${CSS.escape(this.carryTargetFolderPath || "")}"]`
@@ -3870,7 +3964,7 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
-    // [ID 6.5.18] 위/아래 이동 (모드 적응형: 가로 모드=내부 순환, 세로/2D 그리드=아래·위 행 카드 연결)
+    // [ID 6.5.18] 위/아래 이동 (모드 적응형: 위·아래 연결 카드가 있으면 이동, 최상단·최하단 끝에서는 순환하지 않고 안정적으로 멈춤)
     if (!meta && !e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       e.stopPropagation();
@@ -3880,6 +3974,7 @@ export class FolderBoardView extends ItemView {
       const hasHeaderStop = !card.isRootCard;
       const onHeader = this.focusedItemKey === CARD_HEADER_KEY;
       const count = card.items.length;
+      const shouldLoopAtEdge = this.plugin.settings.verticalEdgeBehavior === "loop";
 
       if (count === 0) {
         const neighborIdx = this.findVerticalNeighborCard(
@@ -3909,7 +4004,7 @@ export class FolderBoardView extends ItemView {
 
       if (e.key === "ArrowUp") {
         if (onHeader || (!hasHeaderStop && itemIndex <= 0)) {
-          // 2D 그리드/세로 모드에서 위 행 카드가 있으면 그 카드의 최하단으로 연결, 없으면 현재 카드 최하단 순환
+          // 위쪽 연결 카드가 있으면 그 카드 최하단으로 이동, 최상단 끝에서는 loop 설정이 아닐 경우 제자리에 멈춤
           const aboveIdx = this.findVerticalNeighborCard(this.focusedCardIndex, "up");
           if (aboveIdx >= 0) {
             const aboveCard = this.renderedCards[aboveIdx];
@@ -3921,7 +4016,7 @@ export class FolderBoardView extends ItemView {
             } else if (!aboveCard.isRootCard) {
               this.focusCardHeader(aboveIdx);
             }
-          } else {
+          } else if (shouldLoopAtEdge) {
             this.focusCardItem(this.focusedCardIndex, count - 1, {
               clearSelection: true,
               updatePreview: true
@@ -3944,7 +4039,7 @@ export class FolderBoardView extends ItemView {
             updatePreview: true
           });
         } else if (itemIndex >= count - 1) {
-          // 2D 그리드/세로 모드에서 아래 행 카드가 있으면 그 카드 헤더로 자연스럽게 이동, 없으면 현재 카드 내부 순환
+          // 아래쪽 연결 카드가 있으면 그 카드 헤더로 이동, 최하단 끝에서는 loop 설정이 아닐 경우 제자리에 멈춤
           const belowIdx = this.findVerticalNeighborCard(this.focusedCardIndex, "down");
           if (belowIdx >= 0) {
             const belowCard = this.renderedCards[belowIdx];
@@ -3956,13 +4051,15 @@ export class FolderBoardView extends ItemView {
                 updatePreview: true
               });
             }
-          } else if (hasHeaderStop) {
-            this.focusCardHeader(this.focusedCardIndex);
-          } else {
-            this.focusCardItem(this.focusedCardIndex, 0, {
-              clearSelection: true,
-              updatePreview: true
-            });
+          } else if (shouldLoopAtEdge) {
+            if (hasHeaderStop) {
+              this.focusCardHeader(this.focusedCardIndex);
+            } else {
+              this.focusCardItem(this.focusedCardIndex, 0, {
+                clearSelection: true,
+                updatePreview: true
+              });
+            }
           }
         } else {
           this.focusCardItem(this.focusedCardIndex, itemIndex + 1, {

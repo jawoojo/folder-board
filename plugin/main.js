@@ -2279,6 +2279,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     }
     return [];
   }
+  isAllSourcesAlreadyInFolder(destPath) {
+    const normDest = normalizeFolderStr(destPath);
+    if (this.carryPaths.length === 0) return false;
+    return this.carryPaths.every((p) => {
+      const abs = this.app.vault.getAbstractFileByPath(p);
+      return abs?.parent ? normalizeFolderRef(abs.parent) === normDest : false;
+    });
+  }
   getValidFolderTargetsInCard(card) {
     const targets = [];
     if (!this.isInvalidDropDest(card.folderPath, this.carryPaths)) {
@@ -2291,6 +2299,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     });
     return targets;
   }
+  // [ID 6.5.57] Option(Alt)+방향키 들고 이동 (전역 수직 순회 + 2D 공간 좌/우 이동 통합)
+  // -> 위/아래 이동 시 현재 카드 내부에 갇히지 않고 카드 경계를 넘어 위·아래의 모든 폴더/하위 폴더로 자연스럽게 이동함.
   beginOrStepCarry(direction) {
     if (this.renderedCards.length === 0) return;
     const justStarted = this.carryPaths.length === 0;
@@ -2304,9 +2314,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.carryAnchorX = anchorRect ? anchorRect.left : null;
       this.carryAnchorY = anchorRect ? anchorRect.top + anchorRect.height / 2 : null;
     }
+    const mode = this.plugin.settings.gridCols;
     if (direction === "left" || direction === "right") {
       let spatialHandled = false;
-      if (this.plugin.settings.gridCols === "flow" && this.carryAnchorX !== null && this.carryAnchorY !== null) {
+      if (mode === "flow" && this.carryAnchorX !== null && this.carryAnchorY !== null) {
         const excludePath = justStarted ? normalizeFolderStr(this.renderedCards[this.focusedCardIndex]?.folderPath) : this.carryTargetFolderPath !== null ? normalizeFolderStr(this.carryTargetFolderPath) : null;
         const found = this.findFlowHorizontalCarryTarget(
           direction,
@@ -2334,26 +2345,104 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           }
         }
       }
+    } else if (mode === "flow") {
+      const allTargets = [];
+      this.renderedCards.forEach((card, cardIdx) => {
+        for (const t of this.getValidFolderTargetsInCard(card)) {
+          allTargets.push({ cardIdx, path: t.path, pos: t.pos });
+        }
+      });
+      if (allTargets.length === 0) return;
+      let chosen = null;
+      if (justStarted) {
+        const originCard = this.focusedCardIndex;
+        const originPos = this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+        const nonSameParent = (t) => !this.isAllSourcesAlreadyInFolder(t.path);
+        const candidates = allTargets.filter(nonSameParent);
+        const pool = candidates.length > 0 ? candidates : allTargets;
+        if (direction === "up") {
+          const before = pool.filter(
+            (t) => t.cardIdx < originCard || t.cardIdx === originCard && t.pos < originPos
+          );
+          chosen = before.length > 0 ? before[before.length - 1] : pool[pool.length - 1];
+        } else {
+          const after = pool.filter(
+            (t) => t.cardIdx > originCard || t.cardIdx === originCard && t.pos > originPos
+          );
+          chosen = after.length > 0 ? after[0] : pool[0];
+        }
+      } else {
+        const curFlatIdx = allTargets.findIndex(
+          (t) => t.cardIdx === this.carryCardIndex && t.path === this.carryTargetFolderPath
+        );
+        const delta = direction === "down" ? 1 : -1;
+        const nextFlatIdx = curFlatIdx === -1 ? 0 : (curFlatIdx + delta + allTargets.length) % allTargets.length;
+        chosen = allTargets[nextFlatIdx];
+      }
+      if (chosen) {
+        this.carryCardIndex = chosen.cardIdx;
+        this.carryTargetFolderPath = chosen.path;
+        if (chosen.pos >= 0) {
+          this.ensureFlowWindowIncludes(chosen.cardIdx, chosen.pos);
+        }
+      }
     } else {
       const card = this.renderedCards[this.carryCardIndex];
       if (!card) return;
       const targets = this.getValidFolderTargetsInCard(card);
       if (targets.length === 0) return;
+      const stepToVerticalNeighborCard = (dir) => {
+        if (mode === "scroll") return false;
+        let probeIdx = this.carryCardIndex;
+        for (let guard = 0; guard < this.renderedCards.length; guard++) {
+          const neighborIdx = this.findVerticalNeighborCard(probeIdx, dir);
+          if (neighborIdx < 0) break;
+          const neighborTargets = this.getValidFolderTargetsInCard(this.renderedCards[neighborIdx]);
+          if (neighborTargets.length > 0) {
+            this.carryCardIndex = neighborIdx;
+            this.carryTargetFolderPath = dir === "up" ? neighborTargets[neighborTargets.length - 1].path : neighborTargets[0].path;
+            return true;
+          }
+          probeIdx = neighborIdx;
+        }
+        return false;
+      };
       if (justStarted) {
         const originPos = this.focusedItemKey === CARD_HEADER_KEY ? -1 : this.findFocusedCardAndIndex().itemIndex;
+        const filtered = targets.filter((t) => !this.isAllSourcesAlreadyInFolder(t.path));
         if (direction === "up") {
-          const above = targets.filter((t) => t.pos < originPos);
-          this.carryTargetFolderPath = above.length > 0 ? above[above.length - 1].path : targets[targets.length - 1].path;
+          const above = filtered.filter((t) => t.pos < originPos);
+          if (above.length > 0) {
+            this.carryTargetFolderPath = above[above.length - 1].path;
+          } else if (!stepToVerticalNeighborCard("up")) {
+            this.carryTargetFolderPath = filtered.length > 0 ? filtered[filtered.length - 1].path : targets[targets.length - 1].path;
+          }
         } else {
-          const below = targets.filter((t) => t.pos > originPos);
-          this.carryTargetFolderPath = below.length > 0 ? below[0].path : targets[0].path;
+          const below = filtered.filter((t) => t.pos > originPos);
+          if (below.length > 0) {
+            this.carryTargetFolderPath = below[0].path;
+          } else if (!stepToVerticalNeighborCard("down")) {
+            this.carryTargetFolderPath = filtered.length > 0 ? filtered[0].path : targets[0].path;
+          }
         }
       } else {
         const curIdx = targets.findIndex((t) => t.path === this.carryTargetFolderPath);
-        const delta = direction === "down" ? 1 : -1;
-        const nextIdx = curIdx === -1 ? 0 : (curIdx + delta + targets.length) % targets.length;
-        this.carryTargetFolderPath = targets[nextIdx].path;
+        if (direction === "down") {
+          if (curIdx >= 0 && curIdx < targets.length - 1) {
+            this.carryTargetFolderPath = targets[curIdx + 1].path;
+          } else if (!stepToVerticalNeighborCard("down")) {
+            this.carryTargetFolderPath = targets[0].path;
+          }
+        } else {
+          if (curIdx > 0) {
+            this.carryTargetFolderPath = targets[curIdx - 1].path;
+          } else if (!stepToVerticalNeighborCard("up")) {
+            this.carryTargetFolderPath = targets[targets.length - 1].path;
+          }
+        }
       }
+    }
+    if (direction === "up" || direction === "down") {
       const targetEl = this.gridEl.querySelector(
         `.fb-row[data-card-index="${this.carryCardIndex}"][data-drop-folder="${CSS.escape(this.carryTargetFolderPath || "")}"]`
       ) || this.gridEl.querySelector(
@@ -3615,6 +3704,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       const hasHeaderStop = !card.isRootCard;
       const onHeader = this.focusedItemKey === CARD_HEADER_KEY;
       const count = card.items.length;
+      const shouldLoopAtEdge = this.plugin.settings.verticalEdgeBehavior === "loop";
       if (count === 0) {
         const neighborIdx = this.findVerticalNeighborCard(
           this.focusedCardIndex,
@@ -3653,7 +3743,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
             } else if (!aboveCard.isRootCard) {
               this.focusCardHeader(aboveIdx);
             }
-          } else {
+          } else if (shouldLoopAtEdge) {
             this.focusCardItem(this.focusedCardIndex, count - 1, {
               clearSelection: true,
               updatePreview: true
@@ -3685,13 +3775,15 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
                 updatePreview: true
               });
             }
-          } else if (hasHeaderStop) {
-            this.focusCardHeader(this.focusedCardIndex);
-          } else {
-            this.focusCardItem(this.focusedCardIndex, 0, {
-              clearSelection: true,
-              updatePreview: true
-            });
+          } else if (shouldLoopAtEdge) {
+            if (hasHeaderStop) {
+              this.focusCardHeader(this.focusedCardIndex);
+            } else {
+              this.focusCardItem(this.focusedCardIndex, 0, {
+                clearSelection: true,
+                updatePreview: true
+              });
+            }
           }
         } else {
           this.focusCardItem(this.focusedCardIndex, itemIndex + 1, {
