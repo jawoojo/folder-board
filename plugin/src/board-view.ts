@@ -111,6 +111,7 @@ export class FolderBoardView extends ItemView {
   // -> overflow: visible을 유지(하단 빈공간 0)하면서도 15개 초과 대용량 폴더 내부를 휠·방향키로 실시간 스크롤함.
   private flowScrollOffsets = new Map<string, number>();
   private flowWheelAccum = new Map<string, number>();
+  private animatingFoldKeys = new Set<string>();
   // [ID 6.5.36] viewScope와 window capture 간 중복 실행 방지용 이벤트 추적기
   // -> e.defaultPrevented 대신 WeakSet을 사용해 옵시디언 기본 핫키(Cmd+D 등)가 preventDefault()를 걸어도 보드 동작이 정상 실행되게 함.
   private handledKeyEvents = new WeakSet<KeyboardEvent>();
@@ -1355,12 +1356,11 @@ export class FolderBoardView extends ItemView {
           cls: "tree-item-icon collapse-icon fb-section-caret" + (cardModel.isCollapsedSection ? " is-collapsed" : "")
         });
         setIcon(sectionCaret, "chevron-down");
-        sectionCaret.addEventListener("click", async (e) => {
+        sectionCaret.addEventListener("click", (e) => {
           e.stopPropagation();
           this.focusedCardIndex = cardIdx;
           this.focusedItemKey = CARD_HEADER_KEY;
-          await this.plugin.toggleFlowSectionCollapsed(cardModel.folderPath);
-          this.renderGridAndHeader();
+          void this.toggleFlowSectionAnimated(cardIdx, cardModel.folderPath);
         });
       }
 
@@ -1402,14 +1402,13 @@ export class FolderBoardView extends ItemView {
         if (folder) this.openContextMenu(e, folder);
       });
 
-      headerEl.addEventListener("click", async () => {
+      headerEl.addEventListener("click", () => {
         this.selectedPaths.clear();
         this.selectionAnchorIndex = null;
         this.focusedCardIndex = cardIdx;
         this.focusedItemKey = CARD_HEADER_KEY;
         if (isFlowMode) {
-          await this.plugin.toggleFlowSectionCollapsed(cardModel.folderPath);
-          this.renderGridAndHeader();
+          void this.toggleFlowSectionAnimated(cardIdx, cardModel.folderPath);
           return;
         }
         this.syncFocusAndSelectionDOM();
@@ -1467,6 +1466,14 @@ export class FolderBoardView extends ItemView {
       }
 
       const sizeBar = footer.createDiv({ cls: "fb-flow-size-bar" });
+      // [ID 6.5.53] 호버 선택바 좌측 상하 드래그 손잡이(↕) -> 드래그 리사이징 가능성을 직관적으로 안내
+      const dragHandle = sizeBar.createSpan({
+        cls: "fb-flow-drag-handle",
+        attr: { "aria-label": "위아래 드래그로 길이 조절" }
+      });
+      setIcon(dragHandle, "chevrons-up-down");
+      sizeBar.createSpan({ cls: "fb-flow-size-sep" });
+
       const sizePresets: Array<{ spec: "sm" | "md" | "lg"; label: string; aria: string }> = [
         { spec: "sm", label: "소", aria: `소 (${FLOW_SIZE_SM}개)` },
         { spec: "md", label: "중", aria: `중 (기본 ${FLOW_WINDOW_SIZE}개)` }
@@ -1663,8 +1670,7 @@ export class FolderBoardView extends ItemView {
           this.focusedItemKey = item.key;
           this.selectedPaths.clear();
           this.selectionAnchorIndex = null;
-          await this.plugin.toggleFolderExpanded(item.path);
-          this.renderGridAndHeader();
+          void this.toggleInlineSubfolderAnimated(cardIdx, item.path);
         });
 
         // [ID 6.5.50] 여러줄(트리) 모드에서는 하위 폴더도 더블클릭 진입을 막아 빠른 접기/펼치기 오작동을 방지함
@@ -2758,76 +2764,334 @@ export class FolderBoardView extends ItemView {
     }
   }
 
+  // [ID 6.5.52] 폴더·카드 빠릿한 접기/펼치기 Web Animation 유틸 (110~140ms)
+  // -> DOM 재생성 구조에서도 접힘 직전·펼침 직후 높이와 투명도를 부드럽게 보간하며,
+  // -> 다단 분할된 카드나 40개 초과 대량 행은 클리핑·버벅임 없이 가벼운 슬라이드 페이드로 자동 전환함.
+  private animateSectionBody(cardEl: HTMLElement, mode: "expand" | "collapse", durationMs: number): Promise<void> {
+    const bodyEl = cardEl.querySelector<HTMLElement>(".fb-card-body");
+    const footerEl = cardEl.querySelector<HTMLElement>(".fb-flow-scroll-footer");
+    if (!bodyEl || typeof bodyEl.animate !== "function") return Promise.resolve();
+
+    const isSingleCol = bodyEl.getClientRects().length <= 1 && bodyEl.offsetHeight > 0;
+    const easing = mode === "expand" ? "cubic-bezier(0.16, 1, 0.3, 1)" : "cubic-bezier(0.4, 0, 0.2, 1)";
+    const anims: Animation[] = [];
+
+    if (isSingleCol) {
+      const h = bodyEl.offsetHeight;
+      const prevOverflow = bodyEl.style.overflow;
+      bodyEl.style.overflow = "hidden";
+      const keyframes: Keyframe[] =
+        mode === "expand"
+          ? [
+              { maxHeight: "0px", opacity: 0, transform: "translateY(-4px)" },
+              { maxHeight: `${h}px`, opacity: 1, transform: "translateY(0)" }
+            ]
+          : [
+              { maxHeight: `${h}px`, opacity: 1, transform: "translateY(0)" },
+              { maxHeight: "0px", opacity: 0, transform: "translateY(-4px)" }
+            ];
+      const anim = bodyEl.animate(keyframes, {
+        duration: durationMs,
+        easing,
+        fill: mode === "collapse" ? "forwards" : "none"
+      });
+      anims.push(anim);
+      if (mode === "expand") {
+        void anim.finished.finally(() => {
+          bodyEl.style.overflow = prevOverflow;
+        });
+      }
+    } else {
+      const keyframes: Keyframe[] =
+        mode === "expand"
+          ? [
+              { opacity: 0, transform: "translateY(-4px)" },
+              { opacity: 1, transform: "translateY(0)" }
+            ]
+          : [
+              { opacity: 1, transform: "translateY(0)" },
+              { opacity: 0, transform: "translateY(-4px)" }
+            ];
+      anims.push(
+        bodyEl.animate(keyframes, {
+          duration: Math.max(90, durationMs - 15),
+          easing,
+          fill: mode === "collapse" ? "forwards" : "none"
+        })
+      );
+    }
+
+    if (footerEl && typeof footerEl.animate === "function") {
+      anims.push(
+        footerEl.animate(
+          mode === "expand" ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }],
+          {
+            duration: Math.max(85, durationMs - 20),
+            easing,
+            fill: mode === "collapse" ? "forwards" : "none"
+          }
+        )
+      );
+    }
+
+    return Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(() => undefined);
+  }
+
+  private findRenderedDescendantRows(cardIdx: number, folderPath: string): HTMLElement[] {
+    const prefix = `${folderPath}/`;
+    const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+    if (!cardEl) return [];
+    return Array.from(cardEl.querySelectorAll<HTMLElement>(".fb-row")).filter((el) => {
+      const p = el.dataset.path || "";
+      return p.startsWith(prefix);
+    });
+  }
+
+  private animateSubfolderRows(rows: HTMLElement[], mode: "expand" | "collapse", durationMs: number): Promise<void> {
+    if (rows.length === 0) return Promise.resolve();
+    const easing = mode === "expand" ? "cubic-bezier(0.16, 1, 0.3, 1)" : "cubic-bezier(0.4, 0, 0.2, 1)";
+    const anims: Animation[] = [];
+    const lightweight = rows.length > 40;
+
+    for (const row of rows) {
+      if (typeof row.animate !== "function") continue;
+      if (lightweight) {
+        const kf: Keyframe[] =
+          mode === "expand"
+            ? [
+                { opacity: 0, transform: "translateY(-4px)" },
+                { opacity: 1, transform: "translateY(0)" }
+              ]
+            : [
+                { opacity: 1, transform: "translateY(0)" },
+                { opacity: 0, transform: "translateY(-4px)" }
+              ];
+        anims.push(
+          row.animate(kf, {
+            duration: Math.max(90, durationMs - 20),
+            easing,
+            fill: mode === "collapse" ? "forwards" : "none"
+          })
+        );
+      } else {
+        const h = row.offsetHeight || 27;
+        const cs = window.getComputedStyle(row);
+        const pt = cs.paddingTop;
+        const pb = cs.paddingBottom;
+        const prevOverflow = row.style.overflow;
+        row.style.overflow = "hidden";
+        const kf: Keyframe[] =
+          mode === "expand"
+            ? [
+                { maxHeight: "0px", minHeight: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: 0, transform: "translateY(-3px)" },
+                { maxHeight: `${h}px`, minHeight: `${h}px`, paddingTop: pt, paddingBottom: pb, opacity: 1, transform: "translateY(0)" }
+              ]
+            : [
+                { maxHeight: `${h}px`, minHeight: `${h}px`, paddingTop: pt, paddingBottom: pb, opacity: 1, transform: "translateY(0)" },
+                { maxHeight: "0px", minHeight: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: 0, transform: "translateY(-3px)" }
+              ];
+        const anim = row.animate(kf, {
+          duration: durationMs,
+          easing,
+          fill: mode === "collapse" ? "forwards" : "none"
+        });
+        anims.push(anim);
+        if (mode === "expand") {
+          void anim.finished.finally(() => {
+            row.style.overflow = prevOverflow;
+          });
+        }
+      }
+    }
+
+    return Promise.all(anims.map((a) => a.finished.catch(() => {}))).then(() => undefined);
+  }
+
+  private async toggleFlowSectionAnimated(cardIdx: number, folderPath: string): Promise<void> {
+    const lockKey = `sec:${folderPath}`;
+    if (this.animatingFoldKeys.has(lockKey)) return;
+    this.animatingFoldKeys.add(lockKey);
+
+    try {
+      const willCollapse = !this.plugin.isFlowSectionCollapsed(folderPath);
+      if (willCollapse) {
+        const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+        if (cardEl) {
+          cardEl.querySelector(".fb-section-caret")?.addClass("is-collapsed");
+          await this.animateSectionBody(cardEl, "collapse", 115);
+        }
+        await this.plugin.toggleFlowSectionCollapsed(folderPath);
+        this.renderGridAndHeader();
+      } else {
+        await this.plugin.toggleFlowSectionCollapsed(folderPath);
+        this.renderGridAndHeader();
+        const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+        if (cardEl) {
+          await this.animateSectionBody(cardEl, "expand", 140);
+        }
+        this.scheduleFlowColResizersSync();
+      }
+    } finally {
+      this.animatingFoldKeys.delete(lockKey);
+    }
+  }
+
+  private async toggleInlineSubfolderAnimated(cardIdx: number, folderPath: string): Promise<void> {
+    const lockKey = `sub:${folderPath}`;
+    if (this.animatingFoldKeys.has(lockKey)) return;
+    this.animatingFoldKeys.add(lockKey);
+
+    try {
+      const willCollapse = this.plugin.isFolderExpanded(folderPath);
+      if (willCollapse) {
+        const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+        const rowEl = cardEl?.querySelector<HTMLElement>(`.fb-row[data-path="${CSS.escape(folderPath)}"]`);
+        rowEl?.querySelector(".collapse-icon")?.addClass("is-collapsed");
+        const descendants = this.findRenderedDescendantRows(cardIdx, folderPath);
+        if (descendants.length > 0) {
+          await this.animateSubfolderRows(descendants, "collapse", 110);
+        }
+        await this.plugin.toggleFolderExpanded(folderPath);
+        this.renderGridAndHeader();
+      } else {
+        await this.plugin.toggleFolderExpanded(folderPath);
+        this.renderGridAndHeader();
+        const descendants = this.findRenderedDescendantRows(cardIdx, folderPath);
+        if (descendants.length > 0) {
+          await this.animateSubfolderRows(descendants, "expand", 135);
+        }
+        if (this.plugin.settings.gridCols === "flow") {
+          this.scheduleFlowColResizersSync();
+        }
+      }
+    } finally {
+      this.animatingFoldKeys.delete(lockKey);
+    }
+  }
+
   // [ID 6.5.51] 포커스 레벨 맞춤형 [ / ] 접기·펼치기
   // -> 직속 영역에 포커스가 있으면 보드 전체를 일괄 접기/펼치기하고,
   // -> 특정 폴더 카드나 하위 폴더 내부에 포커스가 있으면 해당 폴더 스코프의 하위 폴더들만 레벨에 맞게 접고 펼침.
   private async setAllSubfoldersExpanded(expanded: boolean): Promise<void> {
-    const collectAllSubfolders = (folder: TFolder, out: string[]) => {
-      for (const child of folder.children) {
-        if (child instanceof TFolder) {
-          const p = normalizeFolderRef(child);
-          if (p) out.push(p);
-          collectAllSubfolders(child, out);
+    if (this.animatingFoldKeys.has("batch")) return;
+    this.animatingFoldKeys.add("batch");
+
+    try {
+      const collectAllSubfolders = (folder: TFolder, out: string[]) => {
+        for (const child of folder.children) {
+          if (child instanceof TFolder) {
+            const p = normalizeFolderRef(child);
+            if (p) out.push(p);
+            collectAllSubfolders(child, out);
+          }
         }
-      }
-    };
+      };
 
-    const isFlowMode = this.plugin.settings.gridCols === "flow";
-    const curCard = this.renderedCards[this.focusedCardIndex];
+      const isFlowMode = this.plugin.settings.gridCols === "flow";
+      const curCard = this.renderedCards[this.focusedCardIndex];
 
-    // 1) 직속 영역(루트 카드) 포커스 시: 현재 보드 전체 일괄 접기/펼치기
-    if (!curCard || curCard.isRootCard) {
-      const folderPaths: string[] = [];
-      const sectionPaths: string[] = [];
-      for (const card of this.renderedCards) {
-        if (card.isRootCard) continue;
-        sectionPaths.push(card.folderPath);
-        const folder = getFolderByPath(this.app, card.folderPath);
-        if (folder) collectAllSubfolders(folder, folderPaths);
+      // 1) 직속 영역(루트 카드) 포커스 시: 현재 보드 전체 일괄 접기/펼치기
+      if (!curCard || curCard.isRootCard) {
+        const folderPaths: string[] = [];
+        const sectionPaths: string[] = [];
+        const prevCollapsedSections = new Set<string>();
+        for (const card of this.renderedCards) {
+          if (card.isRootCard) continue;
+          sectionPaths.push(card.folderPath);
+          if (card.isCollapsedSection) prevCollapsedSections.add(card.folderPath);
+          const folder = getFolderByPath(this.app, card.folderPath);
+          if (folder) collectAllSubfolders(folder, folderPaths);
+        }
+
+        if (!expanded && isFlowMode) {
+          const openCardEls = Array.from(
+            this.gridEl.querySelectorAll<HTMLElement>(".fb-card:not(.is-root-card):not(.is-section-collapsed)")
+          );
+          openCardEls.forEach((el) => el.querySelector(".fb-section-caret")?.addClass("is-collapsed"));
+          await Promise.all(openCardEls.map((el) => this.animateSectionBody(el, "collapse", 110)));
+        }
+
+        if (isFlowMode && sectionPaths.length > 0) {
+          await this.plugin.setFlowSectionsCollapsedBatch(sectionPaths, !expanded);
+        }
+        if (folderPaths.length > 0) {
+          await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+        }
+        this.renderGridAndHeader();
+
+        if (expanded && isFlowMode && prevCollapsedSections.size > 0) {
+          const openedEls = Array.from(
+            this.gridEl.querySelectorAll<HTMLElement>(".fb-card:not(.is-root-card)")
+          ).filter((el) => prevCollapsedSections.has(normalizeFolderStr(el.dataset.dropFolder)));
+          await Promise.all(openedEls.map((el) => this.animateSectionBody(el, "expand", 130)));
+          this.scheduleFlowColResizersSync();
+        }
+        return;
       }
 
-      if (isFlowMode && sectionPaths.length > 0) {
-        await this.plugin.setFlowSectionsCollapsedBatch(sectionPaths, !expanded);
+      // 2) 특정 폴더 카드 또는 내부 하위 폴더 포커스 시: 해당 폴더 스코프만 레벨별 접기/펼치기
+      const cardIdx = this.focusedCardIndex;
+      const targetFolderPath = this.getFocusedTargetFolderPath();
+      const targetFolder = getFolderByPath(this.app, targetFolderPath);
+      const isCardRootScope = targetFolderPath === curCard.folderPath;
+      const subfolders: string[] = [];
+      if (targetFolder) {
+        collectAllSubfolders(targetFolder, subfolders);
       }
-      if (folderPaths.length > 0) {
-        await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+
+      if (expanded) {
+        const wasSectionCollapsed = isFlowMode && this.plugin.isFlowSectionCollapsed(curCard.folderPath);
+        if (wasSectionCollapsed) {
+          await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], false);
+        }
+        const toExpand = isCardRootScope ? subfolders : [targetFolderPath, ...subfolders];
+        const newlyExpanding = toExpand.filter((p) => !this.plugin.isFolderExpanded(p));
+        if (toExpand.length > 0) {
+          await this.plugin.setFoldersExpandedBatch(toExpand, true);
+        }
+        this.renderGridAndHeader();
+        if (wasSectionCollapsed) {
+          const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+          if (cardEl) await this.animateSectionBody(cardEl, "expand", 135);
+        } else if (newlyExpanding.length > 0) {
+          const rowsToAnim = this.findRenderedDescendantRows(cardIdx, targetFolderPath);
+          if (rowsToAnim.length > 0) await this.animateSubfolderRows(rowsToAnim, "expand", 130);
+        }
+        if (isFlowMode) this.scheduleFlowColResizersSync();
+      } else {
+        const hasExpandedDescendant = subfolders.some((p) => this.plugin.isFolderExpanded(p));
+        if (hasExpandedDescendant) {
+          const expandedParents = subfolders.filter((p) => this.plugin.isFolderExpanded(p));
+          const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+          const rowsToAnim = cardEl
+            ? Array.from(cardEl.querySelectorAll<HTMLElement>(".fb-row")).filter((el) => {
+                const p = el.dataset.path || "";
+                return expandedParents.some((parent) => p.startsWith(`${parent}/`));
+              })
+            : [];
+          if (rowsToAnim.length > 0) await this.animateSubfolderRows(rowsToAnim, "collapse", 110);
+          await this.plugin.setFoldersExpandedBatch(subfolders, false);
+        } else if (!isCardRootScope) {
+          const rowsToAnim = this.findRenderedDescendantRows(cardIdx, targetFolderPath);
+          if (rowsToAnim.length > 0) await this.animateSubfolderRows(rowsToAnim, "collapse", 110);
+          await this.plugin.setFoldersExpandedBatch([targetFolderPath], false);
+          this.focusedItemKey = `folder:${targetFolderPath}`;
+        } else if (isFlowMode) {
+          const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+          if (cardEl) {
+            cardEl.querySelector(".fb-section-caret")?.addClass("is-collapsed");
+            await this.animateSectionBody(cardEl, "collapse", 115);
+          }
+          await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], true);
+          this.focusedItemKey = CARD_HEADER_KEY;
+        }
+        this.renderGridAndHeader();
       }
-      this.renderGridAndHeader();
-      return;
+
+      this.scrollFocusedIntoView();
+    } finally {
+      this.animatingFoldKeys.delete("batch");
     }
-
-    // 2) 특정 폴더 카드 또는 내부 하위 폴더 포커스 시: 해당 폴더 스코프만 레벨별 접기/펼치기
-    const targetFolderPath = this.getFocusedTargetFolderPath();
-    const targetFolder = getFolderByPath(this.app, targetFolderPath);
-    const isCardRootScope = targetFolderPath === curCard.folderPath;
-    const subfolders: string[] = [];
-    if (targetFolder) {
-      collectAllSubfolders(targetFolder, subfolders);
-    }
-
-    if (expanded) {
-      if (isFlowMode && this.plugin.isFlowSectionCollapsed(curCard.folderPath)) {
-        await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], false);
-      }
-      const toExpand = isCardRootScope ? subfolders : [targetFolderPath, ...subfolders];
-      if (toExpand.length > 0) {
-        await this.plugin.setFoldersExpandedBatch(toExpand, true);
-      }
-    } else {
-      const hasExpandedDescendant = subfolders.some((p) => this.plugin.isFolderExpanded(p));
-      if (hasExpandedDescendant) {
-        await this.plugin.setFoldersExpandedBatch(subfolders, false);
-      } else if (!isCardRootScope) {
-        await this.plugin.setFoldersExpandedBatch([targetFolderPath], false);
-        this.focusedItemKey = `folder:${targetFolderPath}`;
-      } else if (isFlowMode) {
-        await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], true);
-        this.focusedItemKey = CARD_HEADER_KEY;
-      }
-    }
-
-    this.renderGridAndHeader();
-    this.scrollFocusedIntoView();
   }
 
   private jumpToCardByIndex(cardIdx: number): void {
@@ -3778,11 +4042,11 @@ export class FolderBoardView extends ItemView {
         card &&
         !card.isRootCard
       ) {
-        void this.plugin.toggleFlowSectionCollapsed(card.folderPath).then(() => this.renderGridAndHeader());
+        void this.toggleFlowSectionAnimated(this.focusedCardIndex, card.folderPath);
         return;
       }
       if (item?.type === "folder") {
-        void this.plugin.toggleFolderExpanded(item.path).then(() => this.renderGridAndHeader());
+        void this.toggleInlineSubfolderAnimated(this.focusedCardIndex, item.path);
       } else if (item?.type === "file") {
         const file = getFileByPath(this.app, item.path);
         if (!this.quickLookOpen) {

@@ -416,7 +416,7 @@
   text-align: left;
 }
 
-/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 소·중·대 선택바 + 상하 드래그 리사이즈 (레이아웃 튐 0) */
+/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 드래그 핸들(↕)·소·중·대 선택바 (레이아웃 튐 0) */
 .fb-flow-scroll-footer {
   position: relative;
   padding: 6px 6px 4px 19px;
@@ -438,9 +438,8 @@
 .fb-flow-scroll-footer.is-unscrolled .fb-flow-scroll-track {
   opacity: 0;
 }
-.fb-flow-scroll-footer.is-unscrolled:hover .fb-flow-scroll-track,
 .fb-flow-scroll-footer.is-resizing .fb-flow-scroll-track {
-  opacity: 0.45;
+  opacity: 0.7;
 }
 .fb-flow-scroll-thumb {
   position: absolute;
@@ -448,7 +447,7 @@
   bottom: 0;
   border-radius: 99px;
   background-color: color-mix(in srgb, var(--text-normal) 38%, transparent);
-  transition: left 60ms linear, width 60ms linear;
+  transition: left 60ms linear, width 60ms linear, background-color 120ms ease;
 }
 .fb-flow-scroll-footer.is-resizing .fb-flow-scroll-thumb {
   background-color: var(--interactive-accent);
@@ -462,7 +461,7 @@
   display: inline-flex;
   align-items: center;
   gap: 1px;
-  padding: 1px;
+  padding: 1px 2px 1px 4px;
   border-radius: 99px;
   border: 1px solid var(--background-modifier-border-hover);
   background-color: var(--background-primary);
@@ -471,6 +470,31 @@
   pointer-events: none;
   transition: opacity 130ms ease, transform 130ms ease;
   z-index: 5;
+}
+.fb-flow-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 16px;
+  color: var(--text-faint);
+  cursor: ns-resize;
+  flex-shrink: 0;
+  transition: color 100ms ease;
+}
+.fb-flow-drag-handle:hover {
+  color: var(--text-normal);
+}
+.fb-flow-drag-handle svg {
+  width: 11px;
+  height: 11px;
+}
+.fb-flow-size-sep {
+  width: 1px;
+  height: 10px;
+  margin: 0 2px;
+  background-color: var(--divider-color, var(--background-modifier-border));
+  flex-shrink: 0;
 }
 .fb-flow-size-btn {
   height: 16px !important;
