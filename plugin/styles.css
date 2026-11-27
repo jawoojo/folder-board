@@ -246,6 +246,134 @@
   height: 100%;
 }
 
+/* [ID 6.7.9] 여러줄 모드(연속 다단 트리 탐색기 + 은은한 테두리 & 약간 짙은 배경의 폴더 구간) */
+/* -> column-fill: auto로 하단 빈공간 없이 폴더와 파일이 열 경계를 넘어 쭉 이어지며,
+   -> 폴더별 은은한 테두리·약간 짙은 배경·네이티브 트리 가이드선으로 구조감과 구분감을 동시에 확보함 */
+.fb-grid.fb-layout-flow {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  column-width: 265px;
+  column-gap: 24px;
+  column-fill: auto;
+  column-rule: var(--divider-width, 1px) solid var(--divider-color, var(--background-modifier-border));
+}
+
+.fb-layout-flow .fb-card {
+  display: block;
+  height: auto;
+  margin-bottom: 10px;
+  overflow: visible;
+  break-inside: auto;
+  -webkit-column-break-inside: auto;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.fb-layout-flow .fb-card:not(.is-root-card) {
+  background-color: color-mix(in srgb, var(--background-secondary) 72%, var(--background-primary));
+  border: 1px solid color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 85%, transparent);
+  border-radius: var(--radius-m, 8px);
+  padding: 4px 5px 6px;
+}
+
+.fb-layout-flow .fb-card:not(.is-root-card):hover,
+.fb-layout-flow .fb-card:not(.is-root-card).is-focused-card {
+  border-color: var(--background-modifier-border-hover);
+}
+
+.fb-layout-flow .fb-card.is-root-card {
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.fb-layout-flow .fb-card.is-drag-over,
+.fb-layout-flow .fb-card.is-carry-target {
+  background-color: var(--background-secondary-alt, var(--background-secondary));
+  border-color: color-mix(in srgb, var(--text-normal) 45%, transparent);
+  border-radius: var(--radius-m, 8px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 30%, transparent);
+}
+
+.fb-layout-flow .fb-card.is-reorder-before {
+  box-shadow: 0 -2px 0 0 var(--interactive-accent);
+}
+.fb-layout-flow .fb-card.is-reorder-after {
+  box-shadow: 0 2px 0 0 var(--interactive-accent);
+}
+
+.fb-layout-flow .fb-card-header {
+  min-height: 28px;
+  padding: 2px 5px;
+  border-bottom: none;
+  border-radius: var(--radius-s, 5px);
+  gap: 6px;
+  break-after: avoid;
+  -webkit-column-break-after: avoid;
+}
+
+.fb-layout-flow .fb-card.is-section-collapsed {
+  padding-bottom: 4px;
+}
+
+.fb-section-caret {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--nav-collapse-icon-color, var(--text-faint));
+  flex-shrink: 0;
+  transition: transform 130ms ease;
+}
+.fb-section-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-section-caret.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.fb-section-rule {
+  display: block;
+  flex: 1;
+  min-width: 12px;
+  height: 1px;
+  background-color: var(--divider-color, var(--background-modifier-border));
+  opacity: 0.55;
+}
+
+/* 일반 폴더 섹션 내부: 트리 들여쓰기 가이드선 유지 + 열 경계를 자연스럽게 넘어가도록 overflow visible */
+.fb-layout-flow .fb-card:not(.is-root-card) .fb-card-body.nav-files-container {
+  display: block;
+  margin-left: 11px;
+  padding: 2px 2px 1px 8px;
+  border-left: var(--nav-indentation-guide-width, 1px) solid
+    var(--nav-indentation-guide-color, var(--background-modifier-border));
+  max-height: none;
+  overflow: visible;
+}
+
+.fb-layout-flow .fb-card.is-root-card .fb-card-body.nav-files-container {
+  display: block;
+  padding: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.fb-layout-flow .fb-row {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+}
+
+.fb-layout-flow .fb-empty-card {
+  padding: 5px 8px;
+  text-align: left;
+}
+
 /* ==========================================================================
    네이티브 미니 탐색기 카드
    ========================================================================== */

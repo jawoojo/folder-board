@@ -1,5 +1,5 @@
 // [ID 6.4] Folder Board 플러그인 설정 탭
-// -> 레이아웃, 정렬, 노트 열기 방식, 세로 경계 이동 정책, 영속 펼침/폴더 순서 초기화를 관리함.
+// -> 레이아웃(2/3/4열 · 세로 · 가로 · 여러줄), 정렬, 열기 방식, 경계 이동 정책, 영속 상태 초기화를 관리함.
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FolderBoardPlugin from "./main";
 import type { LayoutColumns, OpenBehavior, SortMode, VerticalEdgeBehavior } from "./types";
@@ -25,10 +25,11 @@ export class FolderBoardSettingTab extends PluginSettingTab {
           .addOption("4", "4열 그리드")
           .addOption("auto", "세로 모드 (넓이 자동 맞춤)")
           .addOption("scroll", "가로 모드 (세로 펼침 · 가로 스크롤)")
+          .addOption("flow", "여러줄 모드 (섹션 분류 · 빈공간 최소화)")
           .setValue(String(this.plugin.settings.gridCols))
           .onChange(async (value) => {
             this.plugin.settings.gridCols = (
-              value === "scroll" || value === "auto" ? value : Number(value)
+              value === "scroll" || value === "auto" || value === "flow" ? value : Number(value)
             ) as LayoutColumns;
             await this.plugin.saveSettings();
             this.plugin.refreshOpenViews();
@@ -64,7 +65,7 @@ export class FolderBoardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("카드 상하 끝에서 ↑/↓ 동작")
-      .setDesc("적응형: 가로 모드는 카드 내부 순환, 2D 그리드·세로 모드는 위/아래 행 폴더 카드로 연결")
+      .setDesc("적응형: 가로 모드는 카드 내부 순환, 2D 그리드·세로·여러줄 모드는 위/아래 섹션으로 연결")
       .addDropdown((dd) =>
         dd
           .addOption("adaptive", "모드 적응형 (추천)")
@@ -91,6 +92,7 @@ export class FolderBoardSettingTab extends PluginSettingTab {
       .addButton((btn) =>
         btn.setButtonText("초기화").onClick(async () => {
           this.plugin.settings.expandedFolders = [];
+          this.plugin.settings.collapsedFlowSections = [];
           await this.plugin.saveSettings();
           this.plugin.refreshOpenViews();
         })

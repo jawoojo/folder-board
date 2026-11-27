@@ -473,7 +473,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       { value: 3, label: "3", aria: "3\uC5F4 \uADF8\uB9AC\uB4DC" },
       { value: 4, label: "4", aria: "4\uC5F4 \uADF8\uB9AC\uB4DC" },
       { value: "auto", label: "", aria: "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)", icon: "layout-grid" },
-      { value: "scroll", label: "", aria: "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)", icon: "columns" }
+      { value: "scroll", label: "", aria: "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)", icon: "columns" },
+      { value: "flow", label: "", aria: "\uC5EC\uB7EC\uC904 \uBAA8\uB4DC (\uC139\uC158 \uBD84\uB958)", icon: "list-tree" }
     ];
     this.layoutBtns = layoutOptions.map((opt) => {
       const btn = colGroup.createEl("button", {
@@ -517,7 +518,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
     this.resizeObserver = new ResizeObserver(() => {
-      if (this.plugin.settings.gridCols === "auto" && this.renderedCards.length > 0) {
+      if (this.renderedCards.length === 0) return;
+      if (this.plugin.settings.gridCols === "auto") {
         this.applyGridLayoutClasses(this.renderedCards.length);
       }
     });
@@ -525,9 +527,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.canvasEl.addEventListener(
       "wheel",
       (e) => {
-        if (this.plugin.settings.gridCols !== "scroll") return;
+        const mode = this.plugin.settings.gridCols;
+        if (mode !== "scroll" && mode !== "flow") return;
         const target = e.target;
-        if (target?.closest(".fb-card-body")) return;
+        if (mode === "scroll" && target?.closest(".fb-card-body")) return;
         if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
           this.canvasEl.scrollLeft += e.deltaY;
           e.preventDefault();
@@ -744,10 +747,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         items: directItems
       });
     }
+    const isFlowMode = this.plugin.settings.gridCols === "flow";
     for (const sub of childFolders) {
       const subPath = normalizeFolderRef(sub);
+      const isCollapsedSection = isFlowMode && !q && this.plugin.isFlowSectionCollapsed(subPath);
       const items = [];
-      this.collectCardTreeItems(sub, 0, items, true);
+      if (!isCollapsedSection) {
+        this.collectCardTreeItems(sub, 0, items, true);
+      }
       const nameMatch = !q || sub.name.toLowerCase().includes(q);
       if (q && !nameMatch && items.length === 0) continue;
       cards.push({
@@ -755,7 +762,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         folderPath: subPath,
         title: sub.name,
         totalCount: this.countFilesRecursive(sub),
-        items
+        items,
+        isCollapsedSection
       });
     }
     if (cards.length === 0) {
@@ -903,10 +911,12 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   }
   applyGridLayoutClasses(cardCount) {
     const prefLayout = this.plugin.settings.gridCols;
-    const isScrollMode = prefLayout === "scroll";
-    this.canvasEl.toggleClass("is-horizontal-scroll", isScrollMode);
-    if (isScrollMode) {
+    const isHorizontalCanvas = prefLayout === "scroll" || prefLayout === "flow";
+    this.canvasEl.toggleClass("is-horizontal-scroll", isHorizontalCanvas);
+    if (prefLayout === "scroll") {
       this.gridEl.className = "fb-grid fb-layout-scroll";
+    } else if (prefLayout === "flow") {
+      this.gridEl.className = "fb-grid fb-layout-flow";
     } else if (prefLayout === "auto") {
       const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
       const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
@@ -938,167 +948,193 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       return;
     }
     const isCarrying = this.carryPaths.length > 0;
+    const isFlowMode = this.plugin.settings.gridCols === "flow";
     cards.forEach((cardModel, cardIdx) => {
-      const isFocusedCard = !isCarrying && cardIdx === this.focusedCardIndex;
-      const isCarryCard = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === cardModel.folderPath;
-      const cardEl = this.gridEl.createDiv({
-        cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
-        attr: {
-          "data-drop-folder": cardModel.folderPath,
-          "data-card-index": String(cardIdx)
-        }
+      this.renderCardElement(this.gridEl, cardModel, cardIdx, isCarrying, isFlowMode);
+    });
+  }
+  renderCardElement(parentEl, cardModel, cardIdx, isCarrying, isFlowMode) {
+    const isFocusedCard = !isCarrying && cardIdx === this.focusedCardIndex;
+    const isCarryCard = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === cardModel.folderPath;
+    const cardEl = parentEl.createDiv({
+      cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
+      attr: {
+        "data-drop-folder": cardModel.folderPath,
+        "data-card-index": String(cardIdx)
+      }
+    });
+    if (!cardModel.isRootCard) {
+      const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
+      const headerEl = cardEl.createDiv({
+        cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
       });
-      if (!cardModel.isRootCard) {
-        const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
-        const headerEl = cardEl.createDiv({
-          cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
+      const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
+      if (isFlowMode) {
+        const sectionCaret = titleWrap.createSpan({
+          cls: "tree-item-icon collapse-icon fb-section-caret" + (cardModel.isCollapsedSection ? " is-collapsed" : "")
         });
-        const titleWrap = headerEl.createDiv({ cls: "fb-card-title-wrap" });
-        const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
-        const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-        applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
-        const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
-        metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
-        headerEl.setAttr("draggable", "true");
-        headerEl.addEventListener(
-          "dragstart",
-          (e) => this.handleCardDragStart(e, cardModel.folderPath, cardModel.title)
-        );
-        const drillBtn = metaEl.createEl("button", {
-          cls: "clickable-icon fb-drill-btn",
-          attr: { "aria-label": `${cardModel.title} \uC5F4\uAE30` }
-        });
-        (0, import_obsidian3.setIcon)(drillBtn, "arrow-right");
-        drillBtn.addEventListener("click", (e) => {
+        (0, import_obsidian3.setIcon)(sectionCaret, "chevron-down");
+        sectionCaret.addEventListener("click", async (e) => {
           e.stopPropagation();
-          this.navigateToFolder(cardModel.folderPath);
-        });
-        headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
-        headerEl.addEventListener("contextmenu", (e) => {
-          const folder = getFolderByPath(this.app, cardModel.folderPath);
-          if (folder) this.openContextMenu(e, folder);
-        });
-        headerEl.addEventListener("click", () => {
-          this.selectedPaths.clear();
-          this.selectionAnchorIndex = null;
           this.focusedCardIndex = cardIdx;
           this.focusedItemKey = CARD_HEADER_KEY;
-          this.syncFocusAndSelectionDOM();
-          this.renderSelectionBar();
-          this.scrollFocusedIntoView();
+          await this.plugin.toggleFlowSectionCollapsed(cardModel.folderPath);
+          this.renderGridAndHeader();
         });
       }
-      const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
-      listEl.addEventListener("click", (e) => {
-        if (e.target?.closest(".fb-row")) return;
-        this.selectedPaths.clear();
-        this.selectionAnchorIndex = null;
-        this.focusedCardIndex = cardIdx;
-        if (cardModel.items.length === 0) {
-          this.focusedItemKey = cardModel.isRootCard ? null : CARD_HEADER_KEY;
-        }
-        this.syncFocusAndSelectionDOM();
-        this.renderSelectionBar();
+      const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
+      const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
+      applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
+      if (isFlowMode) {
+        headerEl.createDiv({ cls: "fb-section-rule" });
+      }
+      const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
+      metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
+      headerEl.setAttr("draggable", "true");
+      headerEl.addEventListener(
+        "dragstart",
+        (e) => this.handleCardDragStart(e, cardModel.folderPath, cardModel.title)
+      );
+      const drillBtn = metaEl.createEl("button", {
+        cls: "clickable-icon fb-drill-btn",
+        attr: { "aria-label": `${cardModel.title} \uC5F4\uAE30` }
       });
-      listEl.addEventListener("contextmenu", (e) => {
-        if (e.target?.closest(".fb-row")) return;
+      (0, import_obsidian3.setIcon)(drillBtn, "arrow-right");
+      drillBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.navigateToFolder(cardModel.folderPath);
+      });
+      headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
+      headerEl.addEventListener("contextmenu", (e) => {
         const folder = getFolderByPath(this.app, cardModel.folderPath);
         if (folder) this.openContextMenu(e, folder);
       });
+      headerEl.addEventListener("click", async () => {
+        this.selectedPaths.clear();
+        this.selectionAnchorIndex = null;
+        this.focusedCardIndex = cardIdx;
+        this.focusedItemKey = CARD_HEADER_KEY;
+        if (isFlowMode) {
+          await this.plugin.toggleFlowSectionCollapsed(cardModel.folderPath);
+          this.renderGridAndHeader();
+          return;
+        }
+        this.syncFocusAndSelectionDOM();
+        this.renderSelectionBar();
+        this.scrollFocusedIntoView();
+      });
+    }
+    if (cardModel.isCollapsedSection) return;
+    const listEl = cardEl.createDiv({ cls: "fb-card-body nav-files-container" });
+    listEl.addEventListener("click", (e) => {
+      if (e.target?.closest(".fb-row")) return;
+      this.selectedPaths.clear();
+      this.selectionAnchorIndex = null;
+      this.focusedCardIndex = cardIdx;
       if (cardModel.items.length === 0) {
-        listEl.createDiv({ cls: "fb-empty-card", text: "\uBE44\uC5B4 \uC788\uC74C" });
-        return;
+        this.focusedItemKey = cardModel.isRootCard ? null : CARD_HEADER_KEY;
       }
-      cardModel.items.forEach((item, itemIdx) => {
-        const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
-        if (item.type === "folder") {
-          const isSelected = this.selectedPaths.has(item.path);
-          const isCarryFolder = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === item.path;
-          const row = listEl.createDiv({
-            cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCarryFolder ? " is-carry-target" : ""),
-            attr: {
-              "data-path": item.path,
-              "data-drag-path": item.path,
-              "data-drop-folder": item.path,
-              "data-item-key": item.key,
-              "data-card-index": String(cardIdx),
-              draggable: "true"
-            }
-          });
-          row.style.paddingLeft = `${8 + item.depth * 14}px`;
-          const caret = row.createSpan({
-            cls: "tree-item-icon collapse-icon" + (item.expanded ? "" : " is-collapsed")
-          });
-          (0, import_obsidian3.setIcon)(caret, "chevron-down");
-          const fIcon = row.createSpan({ cls: "fb-native-icon" });
-          const fTitle = row.createSpan({ cls: "tree-item-inner nav-folder-title-content", text: item.name });
-          applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder");
-          if (item.childCount !== void 0) {
-            row.createSpan({ cls: "fb-row-count", text: String(item.childCount) });
+      this.syncFocusAndSelectionDOM();
+      this.renderSelectionBar();
+    });
+    listEl.addEventListener("contextmenu", (e) => {
+      if (e.target?.closest(".fb-row")) return;
+      const folder = getFolderByPath(this.app, cardModel.folderPath);
+      if (folder) this.openContextMenu(e, folder);
+    });
+    if (cardModel.items.length === 0) {
+      listEl.createDiv({ cls: "fb-empty-card", text: "\uBE44\uC5B4 \uC788\uC74C" });
+      return;
+    }
+    cardModel.items.forEach((item, itemIdx) => {
+      const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
+      if (item.type === "folder") {
+        const isSelected = this.selectedPaths.has(item.path);
+        const isCarryFolder = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === item.path;
+        const row = listEl.createDiv({
+          cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCarryFolder ? " is-carry-target" : ""),
+          attr: {
+            "data-path": item.path,
+            "data-drag-path": item.path,
+            "data-drop-folder": item.path,
+            "data-item-key": item.key,
+            "data-card-index": String(cardIdx),
+            draggable: "true"
           }
-          row.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            if (e.shiftKey && cardIdx === this.focusedCardIndex) {
-              const anchor = this.selectionAnchorIndex ?? this.findFocusedCardAndIndex().itemIndex;
-              const safeAnchor = anchor >= 0 ? anchor : itemIdx;
-              this.selectionAnchorIndex = safeAnchor;
-              this.selectRangeInCard(cardIdx, safeAnchor, itemIdx);
-              return;
-            }
-            if (e.metaKey || e.ctrlKey) {
-              this.focusedCardIndex = cardIdx;
-              this.focusedItemKey = item.key;
-              this.selectionAnchorIndex = itemIdx;
-              if (this.selectedPaths.has(item.path)) this.selectedPaths.delete(item.path);
-              else this.selectedPaths.add(item.path);
-              this.syncFocusAndSelectionDOM();
-              this.renderSelectionBar();
-              return;
-            }
+        });
+        row.style.paddingLeft = `${8 + item.depth * 14}px`;
+        const caret = row.createSpan({
+          cls: "tree-item-icon collapse-icon" + (item.expanded ? "" : " is-collapsed")
+        });
+        (0, import_obsidian3.setIcon)(caret, "chevron-down");
+        const fIcon = row.createSpan({ cls: "fb-native-icon" });
+        const fTitle = row.createSpan({ cls: "tree-item-inner nav-folder-title-content", text: item.name });
+        applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder");
+        if (item.childCount !== void 0) {
+          row.createSpan({ cls: "fb-row-count", text: String(item.childCount) });
+        }
+        row.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (e.shiftKey && cardIdx === this.focusedCardIndex) {
+            const anchor = this.selectionAnchorIndex ?? this.findFocusedCardAndIndex().itemIndex;
+            const safeAnchor = anchor >= 0 ? anchor : itemIdx;
+            this.selectionAnchorIndex = safeAnchor;
+            this.selectRangeInCard(cardIdx, safeAnchor, itemIdx);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) {
             this.focusedCardIndex = cardIdx;
             this.focusedItemKey = item.key;
-            this.selectedPaths.clear();
-            this.selectionAnchorIndex = null;
-            await this.plugin.toggleFolderExpanded(item.path);
-            this.renderGridAndHeader();
-          });
-          row.addEventListener("dblclick", (e) => {
-            e.stopPropagation();
-            this.enterInlineSubfolderLevel(item.path);
-          });
-          row.addEventListener("contextmenu", (e) => {
-            const folder = getFolderByPath(this.app, item.path);
-            if (folder) this.openContextMenu(e, folder);
-          });
-          row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
-        } else {
-          const isSelected = this.selectedPaths.has(item.path);
-          const row = listEl.createDiv({
-            cls: "tree-item-self is-clickable nav-file-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : ""),
-            attr: {
-              "data-path": item.path,
-              "data-drag-path": item.path,
-              "data-item-key": item.key,
-              "data-card-index": String(cardIdx),
-              draggable: "true"
-            }
-          });
-          row.style.paddingLeft = `${10 + item.depth * 14}px`;
-          const nIcon = row.createSpan({ cls: "fb-native-icon" });
-          const nTitle = row.createSpan({ cls: "tree-item-inner nav-file-title-content", text: item.name });
-          applyNativeDecoration(this.app, item.path, nIcon, nTitle, "file-text");
-          row.addEventListener("click", (e) => this.handleFileClick(e, item.path, cardIdx, itemIdx));
-          row.addEventListener("dblclick", (e) => {
-            const file = getFileByPath(this.app, item.path);
-            if (file) void this.openFile(file, e.metaKey || e.ctrlKey);
-          });
-          row.addEventListener("contextmenu", (e) => {
-            const file = getFileByPath(this.app, item.path);
-            if (file) this.openContextMenu(e, file);
-          });
-          row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
-        }
-      });
+            this.selectionAnchorIndex = itemIdx;
+            if (this.selectedPaths.has(item.path)) this.selectedPaths.delete(item.path);
+            else this.selectedPaths.add(item.path);
+            this.syncFocusAndSelectionDOM();
+            this.renderSelectionBar();
+            return;
+          }
+          this.focusedCardIndex = cardIdx;
+          this.focusedItemKey = item.key;
+          this.selectedPaths.clear();
+          this.selectionAnchorIndex = null;
+          await this.plugin.toggleFolderExpanded(item.path);
+          this.renderGridAndHeader();
+        });
+        row.addEventListener("dblclick", (e) => {
+          e.stopPropagation();
+          this.enterInlineSubfolderLevel(item.path);
+        });
+        row.addEventListener("contextmenu", (e) => {
+          const folder = getFolderByPath(this.app, item.path);
+          if (folder) this.openContextMenu(e, folder);
+        });
+        row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
+      } else {
+        const isSelected = this.selectedPaths.has(item.path);
+        const row = listEl.createDiv({
+          cls: "tree-item-self is-clickable nav-file-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : ""),
+          attr: {
+            "data-path": item.path,
+            "data-drag-path": item.path,
+            "data-item-key": item.key,
+            "data-card-index": String(cardIdx),
+            draggable: "true"
+          }
+        });
+        row.style.paddingLeft = `${10 + item.depth * 14}px`;
+        const nIcon = row.createSpan({ cls: "fb-native-icon" });
+        const nTitle = row.createSpan({ cls: "tree-item-inner nav-file-title-content", text: item.name });
+        applyNativeDecoration(this.app, item.path, nIcon, nTitle, "file-text");
+        row.addEventListener("click", (e) => this.handleFileClick(e, item.path, cardIdx, itemIdx));
+        row.addEventListener("dblclick", (e) => {
+          const file = getFileByPath(this.app, item.path);
+          if (file) void this.openFile(file, e.metaKey || e.ctrlKey);
+        });
+        row.addEventListener("contextmenu", (e) => {
+          const file = getFileByPath(this.app, item.path);
+          if (file) this.openContextMenu(e, file);
+        });
+        row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
+      }
     });
   }
   renderShelf() {
@@ -1246,6 +1282,12 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
             }
           }
         }
+      } else if (this.plugin.settings.gridCols === "flow") {
+        const focusTarget = this.gridEl.querySelector(".fb-row.is-carry-target") || this.gridEl.querySelector(".fb-row.is-focused") || this.gridEl.querySelector(".fb-card-header.is-header-focused") || this.gridEl.querySelector(`.fb-card[data-card-index="${activeCardIdx}"]`);
+        if (focusTarget) {
+          focusTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
+        return;
       } else {
         const activeCardEl = this.gridEl.querySelector(
           `.fb-card[data-card-index="${activeCardIdx}"]`
@@ -1844,6 +1886,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   }
   async setAllSubfoldersExpanded(expanded) {
     const folderPaths = [];
+    const sectionPaths = [];
     const collectAllSubfolders = (folder) => {
       for (const child of folder.children) {
         if (child instanceof import_obsidian3.TFolder) {
@@ -1855,11 +1898,16 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     };
     for (const card of this.renderedCards) {
       if (card.isRootCard) continue;
+      sectionPaths.push(card.folderPath);
       const folder = getFolderByPath(this.app, card.folderPath);
       if (folder) collectAllSubfolders(folder);
     }
-    if (folderPaths.length === 0) return;
-    await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+    if (this.plugin.settings.gridCols === "flow" && sectionPaths.length > 0) {
+      await this.plugin.setFlowSectionsCollapsedBatch(sectionPaths, !expanded);
+    }
+    if (folderPaths.length > 0) {
+      await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+    }
     this.renderGridAndHeader();
   }
   jumpToCardByIndex(cardIdx) {
@@ -1988,7 +2036,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       const rect = cardEl.getBoundingClientRect();
-      const pos = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+      const isFlow = this.plugin.settings.gridCols === "flow";
+      const pos = isFlow ? e.clientY < rect.top + rect.height / 2 ? "before" : "after" : e.clientX < rect.left + rect.width / 2 ? "before" : "after";
       if (this.reorderTargetEl !== cardEl || this.reorderPosition !== pos) {
         this.clearReorderHighlight();
         this.reorderTargetEl = cardEl;
@@ -2148,34 +2197,82 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (document.querySelector(".modal-container")) return false;
     return this.app.workspace.getActiveViewOfType(_FolderBoardView) === this;
   }
-  // [ID 6.5.24] 2D 그리드 / 세로 모드에서 화면상 동일 열의 바로 위·아래 행 카드 탐색
-  // -> 대각선(인접 열) 카드로 엉뚱하게 튀지 않도록 동일 열(offsetLeft 오차 24px 이내)에 위치한 카드만 매칭함.
+  // [ID 6.5.24] 2D 그리드 · 세로 · 여러줄 모드에서 동일 열의 바로 위·아래 카드/섹션 탐색
+  // -> getBoundingClientRect() 화면 좌표를 사용해 flex 컬럼(.fb-flow-col)과 grid 양쪽에서 동일 열만 정확히 매칭함.
   findVerticalNeighborCard(cardIdx, direction) {
     if (this.plugin.settings.verticalEdgeBehavior !== "adaptive") return -1;
     if (this.plugin.settings.gridCols === "scroll") return -1;
+    if (this.plugin.settings.gridCols === "flow") {
+      const next = cardIdx + (direction === "down" ? 1 : -1);
+      return next >= 0 && next < this.renderedCards.length ? next : -1;
+    }
     const cardEls = Array.from(this.gridEl.querySelectorAll(".fb-card"));
-    const curEl = cardEls[cardIdx];
+    const curEl = cardEls.find((el) => Number(el.dataset.cardIndex) === cardIdx);
     if (!curEl) return -1;
-    const curTop = curEl.offsetTop;
-    const curLeft = curEl.offsetLeft;
-    const threshold = 10;
-    const sameColTolerance = 24;
+    const curRect = curEl.getBoundingClientRect();
+    const threshold = 8;
+    const sameColTolerance = 28;
     let bestIdx = -1;
     let bestRowDist = Infinity;
-    cardEls.forEach((el, idx) => {
-      if (idx === cardIdx) return;
-      const dy = el.offsetTop - curTop;
-      if (direction === "down" && dy <= threshold) return;
-      if (direction === "up" && dy >= -threshold) return;
-      const colDist = Math.abs(el.offsetLeft - curLeft);
-      if (colDist > sameColTolerance) return;
+    for (const el of cardEls) {
+      const idx = Number(el.dataset.cardIndex);
+      if (idx === cardIdx) continue;
+      const r = el.getBoundingClientRect();
+      const dy = r.top - curRect.top;
+      if (direction === "down" && dy <= threshold) continue;
+      if (direction === "up" && dy >= -threshold) continue;
+      const colDist = Math.abs(r.left - curRect.left);
+      if (colDist > sameColTolerance) continue;
       const rowDist = Math.abs(dy);
       if (rowDist < bestRowDist) {
         bestRowDist = rowDist;
         bestIdx = idx;
       }
-    });
+    }
     return bestIdx;
+  }
+  // [ID 6.5.40] 여러줄 모드(flow)에서 좌/우 방향키 시 물리적으로 인접한 열의 가장 가까운 섹션 탐색
+  findHorizontalNeighborCard(cardIdx, direction) {
+    const cardEls = Array.from(this.gridEl.querySelectorAll(".fb-card"));
+    const curEl = cardEls.find((el) => Number(el.dataset.cardIndex) === cardIdx);
+    if (!curEl) return -1;
+    const curRect = curEl.getBoundingClientRect();
+    const colThreshold = 40;
+    let bestIdx = -1;
+    let bestColDist = Infinity;
+    let bestRowDist = Infinity;
+    for (const el of cardEls) {
+      const idx = Number(el.dataset.cardIndex);
+      if (idx === cardIdx) continue;
+      const r = el.getBoundingClientRect();
+      const dx = r.left - curRect.left;
+      if (direction === "right" && dx <= colThreshold) continue;
+      if (direction === "left" && dx >= -colThreshold) continue;
+      const colDist = Math.abs(dx);
+      const rowDist = Math.abs(r.top - curRect.top);
+      if (colDist < bestColDist - colThreshold || Math.abs(colDist - bestColDist) <= colThreshold && rowDist < bestRowDist) {
+        bestColDist = colDist;
+        bestRowDist = rowDist;
+        bestIdx = idx;
+      }
+    }
+    if (bestIdx !== -1) return bestIdx;
+    let wrapIdx = -1;
+    let extremeX = direction === "right" ? Infinity : -Infinity;
+    let wrapRowDist = Infinity;
+    for (const el of cardEls) {
+      const idx = Number(el.dataset.cardIndex);
+      const r = el.getBoundingClientRect();
+      const isMoreExtreme = direction === "right" ? r.left < extremeX - colThreshold : r.left > extremeX + colThreshold;
+      const isSameExtreme = Math.abs(r.left - extremeX) <= colThreshold;
+      const rowDist = Math.abs(r.top - curRect.top);
+      if (isMoreExtreme || isSameExtreme && rowDist < wrapRowDist) {
+        extremeX = r.left;
+        wrapRowDist = rowDist;
+        wrapIdx = idx;
+      }
+    }
+    return wrapIdx;
   }
   focusCardHeader(cardIdx) {
     this.focusedCardIndex = cardIdx;
@@ -2383,8 +2480,15 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (!meta && !e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
       e.stopPropagation();
-      const delta = e.key === "ArrowRight" ? 1 : -1;
-      const nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
+      const dir = e.key === "ArrowRight" ? "right" : "left";
+      let nextIdx;
+      if (this.plugin.settings.gridCols === "flow") {
+        const spatial = this.findHorizontalNeighborCard(this.focusedCardIndex, dir);
+        nextIdx = spatial >= 0 ? spatial : (this.focusedCardIndex + (dir === "right" ? 1 : -1) + this.renderedCards.length) % this.renderedCards.length;
+      } else {
+        const delta = dir === "right" ? 1 : -1;
+        nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
+      }
       const targetCard = this.renderedCards[nextIdx];
       const firstFileIdx = targetCard.items.findIndex((it) => it.type === "file");
       this.focusCardItem(nextIdx, firstFileIdx >= 0 ? firstFileIdx : 0, {
@@ -2491,7 +2595,11 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (e.code === "Space") {
       e.preventDefault();
       e.stopPropagation();
-      const { item } = this.findFocusedCardAndIndex();
+      const { card, item } = this.findFocusedCardAndIndex();
+      if (this.plugin.settings.gridCols === "flow" && this.focusedItemKey === CARD_HEADER_KEY && card && !card.isRootCard) {
+        void this.plugin.toggleFlowSectionCollapsed(card.folderPath).then(() => this.renderGridAndHeader());
+        return;
+      }
       if (item?.type === "folder") {
         void this.plugin.toggleFolderExpanded(item.path).then(() => this.renderGridAndHeader());
       } else if (item?.type === "file") {
@@ -2551,8 +2659,8 @@ var FolderBoardSettingTab = class extends import_obsidian4.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     new import_obsidian4.Setting(containerEl).setName("\uAE30\uBCF8 \uB808\uC774\uC544\uC6C3").addDropdown(
-      (dd) => dd.addOption("2", "2\uC5F4 \uADF8\uB9AC\uB4DC").addOption("3", "3\uC5F4 \uADF8\uB9AC\uB4DC").addOption("4", "4\uC5F4 \uADF8\uB9AC\uB4DC").addOption("auto", "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)").addOption("scroll", "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)").setValue(String(this.plugin.settings.gridCols)).onChange(async (value) => {
-        this.plugin.settings.gridCols = value === "scroll" || value === "auto" ? value : Number(value);
+      (dd) => dd.addOption("2", "2\uC5F4 \uADF8\uB9AC\uB4DC").addOption("3", "3\uC5F4 \uADF8\uB9AC\uB4DC").addOption("4", "4\uC5F4 \uADF8\uB9AC\uB4DC").addOption("auto", "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)").addOption("scroll", "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)").addOption("flow", "\uC5EC\uB7EC\uC904 \uBAA8\uB4DC (\uC139\uC158 \uBD84\uB958 \xB7 \uBE48\uACF5\uAC04 \uCD5C\uC18C\uD654)").setValue(String(this.plugin.settings.gridCols)).onChange(async (value) => {
+        this.plugin.settings.gridCols = value === "scroll" || value === "auto" || value === "flow" ? value : Number(value);
         await this.plugin.saveSettings();
         this.plugin.refreshOpenViews();
       })
@@ -2570,7 +2678,7 @@ var FolderBoardSettingTab = class extends import_obsidian4.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian4.Setting(containerEl).setName("\uCE74\uB4DC \uC0C1\uD558 \uB05D\uC5D0\uC11C \u2191/\u2193 \uB3D9\uC791").setDesc("\uC801\uC751\uD615: \uAC00\uB85C \uBAA8\uB4DC\uB294 \uCE74\uB4DC \uB0B4\uBD80 \uC21C\uD658, 2D \uADF8\uB9AC\uB4DC\xB7\uC138\uB85C \uBAA8\uB4DC\uB294 \uC704/\uC544\uB798 \uD589 \uD3F4\uB354 \uCE74\uB4DC\uB85C \uC5F0\uACB0").addDropdown(
+    new import_obsidian4.Setting(containerEl).setName("\uCE74\uB4DC \uC0C1\uD558 \uB05D\uC5D0\uC11C \u2191/\u2193 \uB3D9\uC791").setDesc("\uC801\uC751\uD615: \uAC00\uB85C \uBAA8\uB4DC\uB294 \uCE74\uB4DC \uB0B4\uBD80 \uC21C\uD658, 2D \uADF8\uB9AC\uB4DC\xB7\uC138\uB85C\xB7\uC5EC\uB7EC\uC904 \uBAA8\uB4DC\uB294 \uC704/\uC544\uB798 \uC139\uC158\uC73C\uB85C \uC5F0\uACB0").addDropdown(
       (dd) => dd.addOption("adaptive", "\uBAA8\uB4DC \uC801\uC751\uD615 (\uCD94\uCC9C)").addOption("loop", "\uD56D\uC0C1 \uCE74\uB4DC \uB0B4\uBD80 \uC21C\uD658").setValue(this.plugin.settings.verticalEdgeBehavior).onChange(async (value) => {
         this.plugin.settings.verticalEdgeBehavior = value;
         await this.plugin.saveSettings();
@@ -2586,6 +2694,7 @@ var FolderBoardSettingTab = class extends import_obsidian4.PluginSettingTab {
     new import_obsidian4.Setting(containerEl).setName("\uAE30\uC5B5\uB41C \uD3F4\uB354 \uD3BC\uCE68 \uC0C1\uD0DC \uCD08\uAE30\uD654").addButton(
       (btn) => btn.setButtonText("\uCD08\uAE30\uD654").onClick(async () => {
         this.plugin.settings.expandedFolders = [];
+        this.plugin.settings.collapsedFlowSections = [];
         await this.plugin.saveSettings();
         this.plugin.refreshOpenViews();
       })
@@ -2600,7 +2709,8 @@ var DEFAULT_SETTINGS = {
   openBehavior: "same-tab",
   verticalEdgeBehavior: "adaptive",
   expandedFolders: [],
-  folderOrder: {}
+  folderOrder: {},
+  collapsedFlowSections: []
 };
 
 // src/main.ts
@@ -2609,6 +2719,7 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
     this.expandedSet = /* @__PURE__ */ new Set();
+    this.collapsedFlowSet = /* @__PURE__ */ new Set();
   }
   async onload() {
     await this.loadSettings();
@@ -2671,9 +2782,11 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
       this.settings.folderOrder = {};
     }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
+    this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
   }
   async saveSettings() {
     this.settings.expandedFolders = [...this.expandedSet];
+    this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
     await this.saveData(this.settings);
   }
   isFolderExpanded(path) {
@@ -2691,11 +2804,28 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     else this.expandedSet.delete(path);
     await this.saveSettings();
   }
-  // [ID 6.6.6] 여러 하위 폴더 펼침/접힘 일괄 반영 (C/E 단축키용 단일 저장)
   async setFoldersExpandedBatch(paths, expanded) {
     for (const p of paths) {
       if (expanded) this.expandedSet.add(p);
       else this.expandedSet.delete(p);
+    }
+    await this.saveSettings();
+  }
+  // [ID 6.6.7] 여러줄 모드(flow) 폴더 섹션 접힘/펼침 영속 관리
+  isFlowSectionCollapsed(path) {
+    return this.collapsedFlowSet.has(path);
+  }
+  async toggleFlowSectionCollapsed(path) {
+    const next = !this.collapsedFlowSet.has(path);
+    if (next) this.collapsedFlowSet.add(path);
+    else this.collapsedFlowSet.delete(path);
+    await this.saveSettings();
+    return next;
+  }
+  async setFlowSectionsCollapsedBatch(paths, collapsed) {
+    for (const p of paths) {
+      if (collapsed) this.collapsedFlowSet.add(p);
+      else this.collapsedFlowSet.delete(p);
     }
     await this.saveSettings();
   }
@@ -2704,6 +2834,11 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     if (this.expandedSet.has(oldPath)) {
       this.expandedSet.delete(oldPath);
       this.expandedSet.add(newPath);
+      changed = true;
+    }
+    if (this.collapsedFlowSet.has(oldPath)) {
+      this.collapsedFlowSet.delete(oldPath);
+      this.collapsedFlowSet.add(newPath);
       changed = true;
     }
     const nextOrder = {};

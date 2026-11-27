@@ -1,5 +1,5 @@
 // [ID 6.6] Folder Board 옵시디언 플러그인 엔트리포인트
-// -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침 상태 및 사용자 지정 폴더 순서를 관리함.
+// -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침·접힘 상태 및 사용자 지정 폴더 순서를 관리함.
 import { Plugin, WorkspaceLeaf } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS, type FolderBoardSettings } from "./types";
 export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
   private expandedSet = new Set<string>();
+  private collapsedFlowSet = new Set<string>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -82,10 +83,12 @@ export default class FolderBoardPlugin extends Plugin {
       this.settings.folderOrder = {};
     }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
+    this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
   }
 
   async saveSettings(): Promise<void> {
     this.settings.expandedFolders = [...this.expandedSet];
+    this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
     await this.saveData(this.settings);
   }
 
@@ -107,11 +110,31 @@ export default class FolderBoardPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  // [ID 6.6.6] 여러 하위 폴더 펼침/접힘 일괄 반영 (C/E 단축키용 단일 저장)
   async setFoldersExpandedBatch(paths: string[], expanded: boolean): Promise<void> {
     for (const p of paths) {
       if (expanded) this.expandedSet.add(p);
       else this.expandedSet.delete(p);
+    }
+    await this.saveSettings();
+  }
+
+  // [ID 6.6.7] 여러줄 모드(flow) 폴더 섹션 접힘/펼침 영속 관리
+  isFlowSectionCollapsed(path: string): boolean {
+    return this.collapsedFlowSet.has(path);
+  }
+
+  async toggleFlowSectionCollapsed(path: string): Promise<boolean> {
+    const next = !this.collapsedFlowSet.has(path);
+    if (next) this.collapsedFlowSet.add(path);
+    else this.collapsedFlowSet.delete(path);
+    await this.saveSettings();
+    return next;
+  }
+
+  async setFlowSectionsCollapsedBatch(paths: string[], collapsed: boolean): Promise<void> {
+    for (const p of paths) {
+      if (collapsed) this.collapsedFlowSet.add(p);
+      else this.collapsedFlowSet.delete(p);
     }
     await this.saveSettings();
   }
@@ -121,6 +144,11 @@ export default class FolderBoardPlugin extends Plugin {
     if (this.expandedSet.has(oldPath)) {
       this.expandedSet.delete(oldPath);
       this.expandedSet.add(newPath);
+      changed = true;
+    }
+    if (this.collapsedFlowSet.has(oldPath)) {
+      this.collapsedFlowSet.delete(oldPath);
+      this.collapsedFlowSet.add(newPath);
       changed = true;
     }
 
