@@ -19,6 +19,7 @@ import {
   applyNativeDecoration,
   getFileByPath,
   getFolderByPath,
+  invalidateNativeIconCache,
   openNativeFileMenu
 } from "./native-sync";
 import type { BoardCardModel, CardTreeItem, FlowWindowSizeSpec, LayoutColumns, MoveUndoEntry } from "./types";
@@ -152,6 +153,7 @@ export class FolderBoardView extends ItemView {
   private boundDrop: (e: DragEvent) => void;
   private boundDragEnd: () => void;
   private refreshTimer: number | null = null;
+  private lateIconSyncTimer: number | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: FolderBoardPlugin) {
     super(leaf);
@@ -347,6 +349,11 @@ export class FolderBoardView extends ItemView {
       this.shellEl?.focus();
       this.syncScopeState();
     });
+    // [ID 6.5.56] 앱 시작 직후 커뮤니티 아이콘 플러그인이 file-explorer를 뒤늦게 꾸미는 타이밍 보완 (1회 인플레이스 갱신)
+    this.lateIconSyncTimer = window.setTimeout(() => {
+      this.lateIconSyncTimer = null;
+      this.refreshNativeDecorationsInPlace();
+    }, 800);
   }
 
   async onClose(): Promise<void> {
@@ -372,6 +379,10 @@ export class FolderBoardView extends ItemView {
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
+    }
+    if (this.lateIconSyncTimer !== null) {
+      window.clearTimeout(this.lateIconSyncTimer);
+      this.lateIconSyncTimer = null;
     }
     if (this.splitSaveTimer !== null) {
       window.clearTimeout(this.splitSaveTimer);
@@ -1030,7 +1041,33 @@ export class FolderBoardView extends ItemView {
     });
   }
 
+  private refreshNativeDecorationsInPlace(): void {
+    if (!this.gridEl) return;
+    invalidateNativeIconCache();
+
+    this.gridEl.querySelectorAll<HTMLElement>(".fb-card:not(.is-root-card)").forEach((cardEl) => {
+      const folderPath = normalizeFolderStr(cardEl.dataset.dropFolder);
+      const iconEl = cardEl.querySelector<HTMLElement>(".fb-card-header .fb-native-icon");
+      const titleEl = cardEl.querySelector<HTMLElement>(".fb-card-header .fb-card-title");
+      const isExpanded = !cardEl.hasClass("is-section-collapsed");
+      if (folderPath && iconEl && titleEl) {
+        applyNativeDecoration(this.app, folderPath, iconEl, titleEl, "folder", isExpanded);
+      }
+    });
+
+    this.gridEl.querySelectorAll<HTMLElement>(".fb-row").forEach((rowEl) => {
+      const itemPath = rowEl.dataset.path;
+      const iconEl = rowEl.querySelector<HTMLElement>(".fb-native-icon");
+      const titleEl = rowEl.querySelector<HTMLElement>(".tree-item-inner");
+      if (!itemPath || !iconEl || !titleEl) return;
+      const isFolder = rowEl.classList.contains("nav-folder-title");
+      const isExpanded = isFolder ? !rowEl.querySelector(".collapse-icon")?.hasClass("is-collapsed") : undefined;
+      applyNativeDecoration(this.app, itemPath, iconEl, titleEl, isFolder ? "folder" : "file-text", isExpanded);
+    });
+  }
+
   private renderGrid(cards: BoardCardModel[]): void {
+    invalidateNativeIconCache();
     this.gridEl.empty();
     this.applyGridLayoutClasses(cards.length);
 
@@ -1368,7 +1405,7 @@ export class FolderBoardView extends ItemView {
 
       const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
       const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-      applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
+      applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder", !cardModel.isCollapsedSection);
 
       if (isFlowMode) {
         headerEl.createDiv({ cls: "fb-section-rule" });
@@ -1662,7 +1699,7 @@ export class FolderBoardView extends ItemView {
 
         const fIcon = row.createSpan({ cls: "fb-native-icon" });
         const fTitle = row.createSpan({ cls: "tree-item-inner nav-folder-title-content", text: item.name });
-        applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder");
+        applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder", Boolean(item.expanded));
 
         if (item.childCount !== undefined) {
           row.createSpan({ cls: "fb-row-count", text: String(item.childCount) });
@@ -2851,6 +2888,13 @@ export class FolderBoardView extends ItemView {
 
     cardEl.toggleClass("is-section-collapsed", isCollapsed);
     cardEl.querySelector(".fb-section-caret")?.toggleClass("is-collapsed", isCollapsed);
+    if (!cardModel.isRootCard) {
+      const hdrIcon = cardEl.querySelector<HTMLElement>(".fb-card-header .fb-native-icon");
+      const hdrTitle = cardEl.querySelector<HTMLElement>(".fb-card-header .fb-card-title");
+      if (hdrIcon && hdrTitle) {
+        applyNativeDecoration(this.app, cardModel.folderPath, hdrIcon, hdrTitle, "folder", !isCollapsed);
+      }
+    }
 
     const isResizable = isFlowMode && !isCollapsed && cardModel.items.length > FLOW_SIZE_SM;
     const limit = isResizable ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;

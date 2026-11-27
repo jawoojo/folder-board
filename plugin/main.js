@@ -87,6 +87,11 @@ var NamePromptModal = class extends import_obsidian.Modal {
 
 // src/native-sync.ts
 var import_obsidian2 = require("obsidian");
+var fallbackCache = null;
+var CACHE_TTL_MS = 2e3;
+function invalidateNativeIconCache() {
+  fallbackCache = null;
+}
 function getNativeFileExplorerItems(app) {
   try {
     const leaves = app.workspace.getLeavesOfType("file-explorer");
@@ -97,22 +102,306 @@ function getNativeFileExplorerItems(app) {
     return null;
   }
 }
-function applyNativeDecoration(app, path, iconContainer, titleEl, fallbackIcon) {
+function stripCssQuotes(raw) {
+  const trimmed = raw.trim();
+  if (trimmed === "none" || trimmed === "normal" || trimmed === "" || trimmed === '""' || trimmed === "''") {
+    return "";
+  }
+  let inner = trimmed;
+  if (inner.startsWith('"') && inner.endsWith('"') || inner.startsWith("'") && inner.endsWith("'")) {
+    inner = inner.slice(1, -1);
+  }
+  return inner.replace(/[\s\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0]+/g, "");
+}
+function extractPseudoIcon(el) {
+  if (!el || !el.isConnected) return null;
+  const cs = window.getComputedStyle(el, "::before");
+  if (!cs || cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") return null;
+  const bgImage = cs.backgroundImage && cs.backgroundImage !== "none" ? cs.backgroundImage : "";
+  const rawMask = cs.maskImage && cs.maskImage !== "none" ? cs.maskImage : cs.getPropertyValue("-webkit-mask-image");
+  const maskImage = rawMask && rawMask !== "none" ? rawMask : "";
+  const text = stripCssQuotes(cs.content || "");
+  if (!bgImage && !maskImage && !text) return null;
+  if (!text) {
+    const w = parseFloat(cs.width) || 0;
+    const h = parseFloat(cs.height) || 0;
+    if (w > 0 && w < 8 && h > 0 && h < 8) return null;
+  }
+  return {
+    backgroundImage: bgImage,
+    backgroundSize: cs.backgroundSize || "contain",
+    backgroundRepeat: cs.backgroundRepeat || "no-repeat",
+    backgroundPosition: cs.backgroundPosition || "center",
+    maskImage,
+    maskSize: cs.maskSize || cs.getPropertyValue("-webkit-mask-size") || "contain",
+    maskRepeat: cs.maskRepeat || cs.getPropertyValue("-webkit-mask-repeat") || "no-repeat",
+    maskPosition: cs.maskPosition || cs.getPropertyValue("-webkit-mask-position") || "center",
+    backgroundColor: cs.backgroundColor || "",
+    color: cs.color || "",
+    text,
+    fontFamily: cs.fontFamily || "",
+    fontSize: cs.fontSize || ""
+  };
+}
+function isBuiltinExplorerElement(el) {
+  return el.classList.contains("collapse-icon") || el.classList.contains("nav-folder-collapse-indicator") || el.classList.contains("nav-file-tag") || el.classList.contains("tree-item-flair-outer") || el.classList.contains("tree-item-flair");
+}
+function cloneAndPreserveVisuals(source, parentEl) {
+  const clone = source.cloneNode(true);
+  clone.classList.add("fb-cloned-native-icon");
+  if (source.isConnected) {
+    const cs = window.getComputedStyle(source);
+    const parentColor = parentEl.isConnected ? window.getComputedStyle(parentEl).color : "";
+    const tag = clone.tagName.toLowerCase();
+    const isGraphicSelf = tag === "svg" || tag === "img";
+    const hasGraphicChild = isGraphicSelf || Boolean(clone.querySelector("svg, img"));
+    if (!hasGraphicChild && clone instanceof HTMLElement) {
+      if (cs.backgroundImage && cs.backgroundImage !== "none") {
+        clone.style.backgroundImage = cs.backgroundImage;
+        clone.style.backgroundSize = cs.backgroundSize || "contain";
+        clone.style.backgroundRepeat = cs.backgroundRepeat || "no-repeat";
+        clone.style.backgroundPosition = cs.backgroundPosition || "center";
+        clone.style.width = "15px";
+        clone.style.height = "15px";
+      }
+      const rawMask = cs.maskImage && cs.maskImage !== "none" ? cs.maskImage : cs.getPropertyValue("-webkit-mask-image");
+      if (rawMask && rawMask !== "none") {
+        clone.style.maskImage = rawMask;
+        clone.style.setProperty("-webkit-mask-image", rawMask);
+        clone.style.maskSize = cs.maskSize || "contain";
+        clone.style.setProperty("-webkit-mask-size", cs.maskSize || "contain");
+        clone.style.maskRepeat = "no-repeat";
+        clone.style.setProperty("-webkit-mask-repeat", "no-repeat");
+        clone.style.maskPosition = "center";
+        clone.style.setProperty("-webkit-mask-position", "center");
+        if (cs.backgroundColor && cs.backgroundColor !== "rgba(0, 0, 0, 0)") {
+          clone.style.backgroundColor = cs.backgroundColor;
+        }
+        clone.style.width = "15px";
+        clone.style.height = "15px";
+      }
+    }
+    if ((clone instanceof HTMLElement || clone instanceof SVGElement) && !clone.style.color && cs.color && cs.color !== parentColor) {
+      clone.style.color = cs.color;
+    }
+    const srcSvg = tag === "svg" ? source : source.querySelector("svg");
+    const dstSvg = tag === "svg" ? clone : clone.querySelector("svg");
+    if (srcSvg instanceof SVGElement && dstSvg instanceof SVGElement) {
+      const svgCs = window.getComputedStyle(srcSvg);
+      if (!dstSvg.style.color && svgCs.color && svgCs.color !== parentColor) {
+        dstSvg.style.color = svgCs.color;
+      }
+    }
+  }
+  return clone;
+}
+function isCandidateIconElement(el) {
+  const tag = el.tagName.toLowerCase();
+  if (tag === "svg" || tag === "img") return true;
+  if (el.querySelector("svg, img")) return true;
+  if (el.hasAttribute("data-icon")) return true;
+  const cls = el.getAttribute("class") || "";
+  if (/icon/i.test(cls)) return true;
+  const text = (el.textContent || "").trim();
+  if (text.length > 0 && [...text].length <= 3) return true;
+  if (el.isConnected) {
+    const cs = window.getComputedStyle(el);
+    const hasBg = Boolean(cs.backgroundImage && cs.backgroundImage !== "none");
+    const rawMask = cs.maskImage && cs.maskImage !== "none" ? cs.maskImage : cs.getPropertyValue("-webkit-mask-image");
+    if (hasBg || rawMask && rawMask !== "none") return true;
+  }
+  return false;
+}
+function extractIconFromNativeSelf(nativeSelf) {
+  const titleContent = nativeSelf.querySelector(".tree-item-inner");
+  for (const child of Array.from(nativeSelf.children)) {
+    if (child === titleContent || isBuiltinExplorerElement(child)) continue;
+    if (isCandidateIconElement(child)) {
+      return { kind: "node", template: cloneAndPreserveVisuals(child, nativeSelf) };
+    }
+  }
+  if (titleContent) {
+    for (const child of Array.from(titleContent.children)) {
+      if (isBuiltinExplorerElement(child)) continue;
+      if (isCandidateIconElement(child)) {
+        return { kind: "node", template: cloneAndPreserveVisuals(child, titleContent) };
+      }
+    }
+  }
+  const pseudo = extractPseudoIcon(titleContent) || extractPseudoIcon(nativeSelf);
+  if (pseudo) {
+    return { kind: "pseudo", styles: pseudo };
+  }
+  return null;
+}
+function renderExtractedIcon(container, icon) {
+  if (icon.kind === "node") {
+    container.appendChild(icon.template.cloneNode(true));
+    return;
+  }
+  const span = container.createSpan({ cls: "fb-mirrored-pseudo-icon" });
+  const s = icon.styles;
+  if (s.backgroundImage) {
+    span.style.backgroundImage = s.backgroundImage;
+    span.style.backgroundSize = s.backgroundSize;
+    span.style.backgroundRepeat = s.backgroundRepeat;
+    span.style.backgroundPosition = s.backgroundPosition;
+  } else if (s.maskImage) {
+    span.style.maskImage = s.maskImage;
+    span.style.setProperty("-webkit-mask-image", s.maskImage);
+    span.style.maskSize = s.maskSize;
+    span.style.setProperty("-webkit-mask-size", s.maskSize);
+    span.style.maskRepeat = s.maskRepeat;
+    span.style.setProperty("-webkit-mask-repeat", s.maskRepeat);
+    span.style.maskPosition = s.maskPosition;
+    span.style.setProperty("-webkit-mask-position", s.maskPosition);
+    span.style.backgroundColor = s.backgroundColor && s.backgroundColor !== "rgba(0, 0, 0, 0)" ? s.backgroundColor : s.color || "currentColor";
+  } else if (s.text) {
+    span.setText(s.text);
+    if (s.color) span.style.color = s.color;
+    if (s.fontFamily) span.style.fontFamily = s.fontFamily;
+    if (s.fontSize) span.style.fontSize = s.fontSize;
+  }
+}
+function getExtensionFromPath(path) {
+  const fileName = path.split("/").pop() || "";
+  const dotIdx = fileName.lastIndexOf(".");
+  if (dotIdx <= 0 || dotIdx === fileName.length - 1) return "";
+  return fileName.slice(dotIdx + 1).toLowerCase();
+}
+function getIconSignature(icon) {
+  if (!icon) return "";
+  if (icon.kind === "node") {
+    const key = icon.template.getAttribute("data-mfi-icon-key");
+    if (key) return `mfi:${key}`;
+    return icon.template.innerHTML.slice(0, 160);
+  }
+  return icon.styles.backgroundImage || icon.styles.maskImage || icon.styles.text;
+}
+function isNativeFolderCollapsed(nativeSelf) {
+  const folderItem = nativeSelf.closest(".nav-folder");
+  if (folderItem) return folderItem.classList.contains("is-collapsed");
+  const caret = nativeSelf.querySelector(".collapse-icon");
+  return caret ? caret.classList.contains("is-collapsed") : true;
+}
+function getFallbackIconCache(fileItems) {
+  const now = Date.now();
+  if (fallbackCache && now - fallbackCache.builtAt < CACHE_TTL_MS) {
+    return fallbackCache;
+  }
+  const byExt = /* @__PURE__ */ new Map();
+  let defaultFolderClosed = null;
+  let defaultFolderOpen = null;
+  let defaultFolderClosedHtml = "";
+  let defaultFolderOpenHtml = "";
+  for (const [itemPath, entry] of Object.entries(fileItems)) {
+    const selfEl = entry?.selfEl;
+    if (!selfEl || !selfEl.isConnected) continue;
+    const isFolder = selfEl.classList.contains("nav-folder-title");
+    if (isFolder) {
+      const collapsed = isNativeFolderCollapsed(selfEl);
+      if (collapsed && !defaultFolderClosed) {
+        const extracted2 = extractIconFromNativeSelf(selfEl);
+        if (extracted2) {
+          const mfiKey = extracted2.kind === "node" ? extracted2.template.getAttribute("data-mfi-icon-key") : null;
+          if (!mfiKey || mfiKey === "folder") {
+            defaultFolderClosed = extracted2;
+            defaultFolderClosedHtml = getIconSignature(extracted2);
+          }
+        }
+      } else if (!collapsed && !defaultFolderOpen) {
+        const extracted2 = extractIconFromNativeSelf(selfEl);
+        if (extracted2) {
+          const mfiKey = extracted2.kind === "node" ? extracted2.template.getAttribute("data-mfi-icon-key") : null;
+          if (!mfiKey || mfiKey === "folder-open") {
+            defaultFolderOpen = extracted2;
+            defaultFolderOpenHtml = getIconSignature(extracted2);
+          }
+        }
+      }
+      continue;
+    }
+    const ext = getExtensionFromPath(itemPath);
+    if (!ext || byExt.has(ext)) continue;
+    const extracted = extractIconFromNativeSelf(selfEl);
+    if (extracted) {
+      byExt.set(ext, extracted);
+    }
+  }
+  if (!defaultFolderClosed || !defaultFolderOpen) {
+    for (const entry of Object.values(fileItems)) {
+      const selfEl = entry?.selfEl;
+      if (!selfEl || !selfEl.isConnected || !selfEl.classList.contains("nav-folder-title")) continue;
+      const collapsed = isNativeFolderCollapsed(selfEl);
+      if (collapsed && !defaultFolderClosed) {
+        const extracted = extractIconFromNativeSelf(selfEl);
+        if (extracted) {
+          defaultFolderClosed = extracted;
+          defaultFolderClosedHtml = getIconSignature(extracted);
+        }
+      } else if (!collapsed && !defaultFolderOpen) {
+        const extracted = extractIconFromNativeSelf(selfEl);
+        if (extracted) {
+          defaultFolderOpen = extracted;
+          defaultFolderOpenHtml = getIconSignature(extracted);
+        }
+      }
+      if (defaultFolderClosed && defaultFolderOpen) break;
+    }
+  }
+  fallbackCache = {
+    builtAt: now,
+    byExt,
+    defaultFolderClosed,
+    defaultFolderOpen,
+    defaultFolderClosedHtml,
+    defaultFolderOpenHtml
+  };
+  return fallbackCache;
+}
+function applyNativeDecoration(app, path, iconContainer, titleEl, fallbackIcon, isExpandedFolder) {
   iconContainer.empty();
+  iconContainer.removeClass("is-hidden");
   const fileItems = getNativeFileExplorerItems(app);
   const nativeSelf = fileItems?.[path]?.selfEl;
   if (nativeSelf) {
-    const inlineColor = nativeSelf.style.color || nativeSelf.style.getPropertyValue("--folder-color");
-    if (inlineColor) {
-      titleEl.style.color = inlineColor;
+    const nativeTitle = nativeSelf.querySelector(".tree-item-inner");
+    const customColor = nativeTitle?.style.color || nativeSelf.style.color || nativeSelf.style.getPropertyValue("--folder-color") || nativeSelf.style.getPropertyValue("--color");
+    if (customColor) {
+      titleEl.style.color = customColor;
     }
-    const customIcon = nativeSelf.querySelector(
-      ".obsidian-icon-folder-icon, .iconic-icon, .folder-icon, [data-icon]"
-    );
-    if (customIcon) {
-      const cloned = customIcon.cloneNode(true);
-      cloned.classList.add("fb-cloned-native-icon");
-      iconContainer.appendChild(cloned);
+  }
+  const rowEl = titleEl.parentElement instanceof HTMLElement ? titleEl.parentElement : null;
+  if (extractPseudoIcon(titleEl) || extractPseudoIcon(rowEl)) {
+    iconContainer.addClass("is-hidden");
+    return;
+  }
+  const cache = fileItems ? getFallbackIconCache(fileItems) : null;
+  if (nativeSelf) {
+    const exactIcon = extractIconFromNativeSelf(nativeSelf);
+    if (exactIcon) {
+      if (fallbackIcon === "folder" && isExpandedFolder !== void 0 && cache) {
+        const sig = getIconSignature(exactIcon);
+        const isGenericFolder = sig === "mfi:folder" || sig === "mfi:folder-open" || cache.defaultFolderClosedHtml !== "" && sig === cache.defaultFolderClosedHtml || cache.defaultFolderOpenHtml !== "" && sig === cache.defaultFolderOpenHtml;
+        if (isGenericFolder) {
+          const stateMatched = isExpandedFolder ? cache.defaultFolderOpen || exactIcon : cache.defaultFolderClosed || exactIcon;
+          renderExtractedIcon(iconContainer, stateMatched);
+          return;
+        }
+      }
+      renderExtractedIcon(iconContainer, exactIcon);
+      return;
+    }
+  }
+  if (cache) {
+    let cachedIcon = null;
+    if (fallbackIcon === "folder") {
+      cachedIcon = isExpandedFolder ? cache.defaultFolderOpen || cache.defaultFolderClosed : cache.defaultFolderClosed || cache.defaultFolderOpen;
+    } else {
+      cachedIcon = cache.byExt.get(getExtensionFromPath(path)) || null;
+    }
+    if (cachedIcon) {
+      renderExtractedIcon(iconContainer, cachedIcon);
       return;
     }
   }
@@ -256,6 +545,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.viewScope = null;
     this.scopeActive = false;
     this.refreshTimer = null;
+    this.lateIconSyncTimer = null;
     this.plugin = plugin;
     this.boundKeydown = this.handleKeydown.bind(this);
     this.boundKeyup = this.handleKeyup.bind(this);
@@ -410,6 +700,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.shellEl?.focus();
       this.syncScopeState();
     });
+    this.lateIconSyncTimer = window.setTimeout(() => {
+      this.lateIconSyncTimer = null;
+      this.refreshNativeDecorationsInPlace();
+    }, 800);
   }
   async onClose() {
     this.closeQuickEditLeaf(false);
@@ -433,6 +727,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (this.refreshTimer !== null) {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
+    }
+    if (this.lateIconSyncTimer !== null) {
+      window.clearTimeout(this.lateIconSyncTimer);
+      this.lateIconSyncTimer = null;
     }
     if (this.splitSaveTimer !== null) {
       window.clearTimeout(this.splitSaveTimer);
@@ -984,7 +1282,30 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       onRequestCreateFolder: (folderPath) => this.promptCreateFolder(folderPath)
     });
   }
+  refreshNativeDecorationsInPlace() {
+    if (!this.gridEl) return;
+    invalidateNativeIconCache();
+    this.gridEl.querySelectorAll(".fb-card:not(.is-root-card)").forEach((cardEl) => {
+      const folderPath = normalizeFolderStr(cardEl.dataset.dropFolder);
+      const iconEl = cardEl.querySelector(".fb-card-header .fb-native-icon");
+      const titleEl = cardEl.querySelector(".fb-card-header .fb-card-title");
+      const isExpanded = !cardEl.hasClass("is-section-collapsed");
+      if (folderPath && iconEl && titleEl) {
+        applyNativeDecoration(this.app, folderPath, iconEl, titleEl, "folder", isExpanded);
+      }
+    });
+    this.gridEl.querySelectorAll(".fb-row").forEach((rowEl) => {
+      const itemPath = rowEl.dataset.path;
+      const iconEl = rowEl.querySelector(".fb-native-icon");
+      const titleEl = rowEl.querySelector(".tree-item-inner");
+      if (!itemPath || !iconEl || !titleEl) return;
+      const isFolder = rowEl.classList.contains("nav-folder-title");
+      const isExpanded = isFolder ? !rowEl.querySelector(".collapse-icon")?.hasClass("is-collapsed") : void 0;
+      applyNativeDecoration(this.app, itemPath, iconEl, titleEl, isFolder ? "folder" : "file-text", isExpanded);
+    });
+  }
   renderGrid(cards) {
+    invalidateNativeIconCache();
     this.gridEl.empty();
     this.applyGridLayoutClasses(cards.length);
     if (cards.length === 0) {
@@ -1259,7 +1580,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       }
       const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
       const nameEl = titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-      applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder");
+      applyNativeDecoration(this.app, cardModel.folderPath, iconEl, nameEl, "folder", !cardModel.isCollapsedSection);
       if (isFlowMode) {
         headerEl.createDiv({ cls: "fb-section-rule" });
       }
@@ -1484,7 +1805,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         (0, import_obsidian3.setIcon)(caret, "chevron-down");
         const fIcon = row.createSpan({ cls: "fb-native-icon" });
         const fTitle = row.createSpan({ cls: "tree-item-inner nav-folder-title-content", text: item.name });
-        applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder");
+        applyNativeDecoration(this.app, item.path, fIcon, fTitle, "folder", Boolean(item.expanded));
         if (item.childCount !== void 0) {
           row.createSpan({ cls: "fb-row-count", text: String(item.childCount) });
         }
@@ -2489,6 +2810,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     cardEl.querySelector(".fb-flow-scroll-footer")?.remove();
     cardEl.toggleClass("is-section-collapsed", isCollapsed);
     cardEl.querySelector(".fb-section-caret")?.toggleClass("is-collapsed", isCollapsed);
+    if (!cardModel.isRootCard) {
+      const hdrIcon = cardEl.querySelector(".fb-card-header .fb-native-icon");
+      const hdrTitle = cardEl.querySelector(".fb-card-header .fb-card-title");
+      if (hdrIcon && hdrTitle) {
+        applyNativeDecoration(this.app, cardModel.folderPath, hdrIcon, hdrTitle, "folder", !isCollapsed);
+      }
+    }
     const isResizable = isFlowMode && !isCollapsed && cardModel.items.length > FLOW_SIZE_SM;
     const limit = isResizable ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
     const isScrollable = isResizable && cardModel.items.length > limit;
