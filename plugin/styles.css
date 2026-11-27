@@ -302,34 +302,42 @@
   background-color: var(--interactive-accent);
 }
 
+/* [ID 6.7.15] 아이디어 A — 평소 순수 다단 트리 통일, 호버·포커스·이동 대상 폴더만 은은한 카드로 활성화 */
+/* -> 상시 사각 테두리와 헤더 가로선을 걷어내 직속·폴더 이질감과 열 분할 박스 쪼개짐을 없애고,
+   -> 투명 1px border를 예약해 호버/포커스 시 0px 레이아웃 튐으로 깔끔하게 카드 톤이 살아남 */
 .fb-layout-flow .fb-card {
   display: block;
   height: auto;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   overflow: visible;
   break-inside: auto;
   -webkit-column-break-inside: auto;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
+  border-radius: var(--radius-m, 8px);
+  transition: background-color 140ms ease, border-color 140ms ease;
 }
 
 .fb-layout-flow .fb-card:not(.is-root-card) {
-  background-color: color-mix(in srgb, var(--background-secondary) 72%, var(--background-primary));
-  border: 1px solid color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 85%, transparent);
-  border-radius: var(--radius-m, 8px);
-  padding: 4px 5px 6px;
+  background-color: transparent;
+  border: 1px solid transparent;
+  padding: 3px 5px 5px;
 }
 
-.fb-layout-flow .fb-card:not(.is-root-card):hover,
+.fb-layout-flow .fb-card:not(.is-root-card):hover {
+  background-color: color-mix(in srgb, var(--background-secondary) 52%, transparent);
+  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 65%, transparent);
+}
+
 .fb-layout-flow .fb-card:not(.is-root-card).is-focused-card {
-  border-color: var(--background-modifier-border-hover);
+  background-color: color-mix(in srgb, var(--background-secondary) 68%, transparent);
+  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 90%, transparent);
 }
 
 .fb-layout-flow .fb-card.is-root-card {
   background-color: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
+  border: 1px solid transparent;
+  padding: 3px 5px 5px;
 }
 
 .fb-layout-flow .fb-card.is-drag-over,
@@ -358,7 +366,7 @@
 }
 
 .fb-layout-flow .fb-card.is-section-collapsed {
-  padding-bottom: 4px;
+  padding-bottom: 3px;
 }
 
 .fb-section-caret {
@@ -380,12 +388,7 @@
 }
 
 .fb-section-rule {
-  display: block;
-  flex: 1;
-  min-width: 12px;
-  height: 1px;
-  background-color: var(--divider-color, var(--background-modifier-border));
-  opacity: 0.55;
+  display: none;
 }
 
 /* 일반 폴더 섹션 내부: 트리 들여쓰기 가이드선 유지 + 열 경계를 자연스럽게 넘어가도록 overflow visible */
@@ -394,9 +397,14 @@
   margin-left: 11px;
   padding: 2px 2px 1px 8px;
   border-left: var(--nav-indentation-guide-width, 1px) solid
-    var(--nav-indentation-guide-color, var(--background-modifier-border));
+    color-mix(in srgb, var(--nav-indentation-guide-color, var(--background-modifier-border)) 78%, transparent);
   max-height: none;
   overflow: visible;
+  transition: border-left-color 140ms ease;
+}
+.fb-layout-flow .fb-card:not(.is-root-card):hover .fb-card-body.nav-files-container,
+.fb-layout-flow .fb-card:not(.is-root-card).is-focused-card .fb-card-body.nav-files-container {
+  border-left-color: var(--nav-indentation-guide-color, var(--background-modifier-border));
 }
 
 .fb-layout-flow .fb-card.is-root-card .fb-card-body.nav-files-container {
