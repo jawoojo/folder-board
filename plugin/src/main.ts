@@ -9,6 +9,7 @@ export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
   private expandedSet = new Set<string>();
   private collapsedFlowSet = new Set<string>();
+  private expandedFlowWinSet = new Set<string>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -82,13 +83,24 @@ export default class FolderBoardPlugin extends Plugin {
     if (!this.settings.folderOrder || typeof this.settings.folderOrder !== "object") {
       this.settings.folderOrder = {};
     }
+    if (typeof this.settings.flowColumnWidth !== "number" || !Number.isFinite(this.settings.flowColumnWidth)) {
+      this.settings.flowColumnWidth = DEFAULT_SETTINGS.flowColumnWidth;
+    }
+    if (
+      typeof this.settings.quickLookSplitRatio !== "number" ||
+      !Number.isFinite(this.settings.quickLookSplitRatio)
+    ) {
+      this.settings.quickLookSplitRatio = DEFAULT_SETTINGS.quickLookSplitRatio;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
+    this.expandedFlowWinSet = new Set(this.settings.expandedFlowWindows || []);
   }
 
   async saveSettings(): Promise<void> {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
+    this.settings.expandedFlowWindows = [...this.expandedFlowWinSet];
     await this.saveData(this.settings);
   }
 
@@ -139,6 +151,26 @@ export default class FolderBoardPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  // [ID 6.6.8] 여러줄 모드(flow) 대용량 폴더 1열 확장 토글 영속 관리
+  isFlowWindowExpanded(key: string): boolean {
+    return this.expandedFlowWinSet.has(key);
+  }
+
+  async toggleFlowWindowExpanded(key: string): Promise<boolean> {
+    const next = !this.expandedFlowWinSet.has(key);
+    if (next) this.expandedFlowWinSet.add(key);
+    else this.expandedFlowWinSet.delete(key);
+    await this.saveSettings();
+    return next;
+  }
+
+  async resetAllExpandedStates(): Promise<void> {
+    this.expandedSet.clear();
+    this.collapsedFlowSet.clear();
+    this.expandedFlowWinSet.clear();
+    await this.saveSettings();
+  }
+
   async renameExpandedFolder(oldPath: string, newPath: string): Promise<void> {
     let changed = false;
     if (this.expandedSet.has(oldPath)) {
@@ -149,6 +181,11 @@ export default class FolderBoardPlugin extends Plugin {
     if (this.collapsedFlowSet.has(oldPath)) {
       this.collapsedFlowSet.delete(oldPath);
       this.collapsedFlowSet.add(newPath);
+      changed = true;
+    }
+    if (this.expandedFlowWinSet.has(oldPath)) {
+      this.expandedFlowWinSet.delete(oldPath);
+      this.expandedFlowWinSet.add(newPath);
       changed = true;
     }
 

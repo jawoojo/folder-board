@@ -17,6 +17,10 @@ export interface FolderBoardSettings {
   folderOrder: Record<string, string[]>;
   // [ID 6.1.4] 여러줄 모드(flow)에서 접어둔 폴더 섹션 경로 목록
   collapsedFlowSections: string[];
+  // [ID 6.1.5] 여러줄 모드(flow) 대용량 폴더 1열 확장 토글 상태 · 다단 폭 · 우측 분할 편집창 비율 영속화
+  expandedFlowWindows: string[];
+  flowColumnWidth: number;
+  quickLookSplitRatio: number;
 }
 
 export const DEFAULT_SETTINGS: FolderBoardSettings = {
@@ -26,7 +30,10 @@ export const DEFAULT_SETTINGS: FolderBoardSettings = {
   verticalEdgeBehavior: "adaptive",
   expandedFolders: [],
   folderOrder: {},
-  collapsedFlowSections: []
+  collapsedFlowSections: [],
+  expandedFlowWindows: [],
+  flowColumnWidth: 270,
+  quickLookSplitRatio: 0.4
 };
 
 export interface CardTreeItem {

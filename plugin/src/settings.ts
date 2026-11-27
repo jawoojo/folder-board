@@ -91,9 +91,7 @@ export class FolderBoardSettingTab extends PluginSettingTab {
       .setName("기억된 폴더 펼침 상태 초기화")
       .addButton((btn) =>
         btn.setButtonText("초기화").onClick(async () => {
-          this.plugin.settings.expandedFolders = [];
-          this.plugin.settings.collapsedFlowSections = [];
-          await this.plugin.saveSettings();
+          await this.plugin.resetAllExpandedStates();
           this.plugin.refreshOpenViews();
         })
       );

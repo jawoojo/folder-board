@@ -176,6 +176,7 @@
 }
 
 .fb-canvas {
+  position: relative;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
@@ -246,18 +247,59 @@
   height: 100%;
 }
 
-/* [ID 6.7.9] 여러줄 모드(연속 다단 트리 탐색기 + 은은한 테두리 & 약간 짙은 배경의 폴더 구간) */
-/* -> column-fill: auto로 하단 빈공간 없이 폴더와 파일이 열 경계를 넘어 쭉 이어지며,
-   -> 폴더별 은은한 테두리·약간 짙은 배경·네이티브 트리 가이드선으로 구조감과 구분감을 동시에 확보함 */
+/* [ID 6.7.9] 여러줄 모드(연속 다단 트리 탐색기 + 고정 구분선 제거 + 드래그 가변 열 폭) */
+/* -> width와 column-width를 동일 CSS 변수(--fb-flow-col-width)로 묶어 다단 드래그 시 픽셀 단위로 매끄럽게 너비가 조절됨 */
 .fb-grid.fb-layout-flow {
   display: block;
-  width: 100%;
+  align-self: flex-start;
+  width: var(--fb-flow-col-width, 270px);
   height: 100%;
-  min-height: 100%;
-  column-width: 265px;
+  min-height: 0;
+  column-width: var(--fb-flow-col-width, 270px);
   column-gap: 24px;
   column-fill: auto;
-  column-rule: var(--divider-width, 1px) solid var(--divider-color, var(--background-modifier-border));
+}
+.fb-grid.fb-layout-flow.is-empty {
+  width: 100%;
+  column-width: auto;
+  display: flex;
+}
+
+/* [ID 6.7.11] 여러줄 모드 호버 전용 다단 너비 조절 바 (평소 투명 · 호버/드래그 시 노출) */
+.fb-col-resizers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+.fb-col-resizer {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  width: 14px;
+  pointer-events: auto;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fb-col-resizer::after {
+  content: "";
+  width: 2px;
+  height: 100%;
+  border-radius: 99px;
+  background-color: transparent;
+  transition: background-color 130ms ease, width 110ms ease;
+}
+.fb-col-resizer:hover::after {
+  background-color: color-mix(in srgb, var(--text-normal) 28%, transparent);
+}
+.fb-col-resizer.is-dragging::after {
+  width: 2.5px;
+  background-color: var(--interactive-accent);
 }
 
 .fb-layout-flow .fb-card {
@@ -374,16 +416,24 @@
   text-align: left;
 }
 
-/* [ID 6.7.10] 여러줄 모드 가상 슬라이딩 윈도우 2px 미니 스크롤 인디케이터 */
+/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 확장/줄이기 버튼 (절대 위치로 레이아웃 튐 0) */
+.fb-flow-scroll-footer {
+  position: relative;
+  padding: 6px 6px 4px 19px;
+  cursor: pointer;
+  break-before: avoid;
+  -webkit-column-break-before: avoid;
+}
+.fb-card.is-root-card .fb-flow-scroll-footer {
+  padding-left: 4px;
+}
 .fb-flow-scroll-track {
   position: relative;
   height: 2px;
-  margin: 4px 6px 1px 19px;
   border-radius: 99px;
   background-color: color-mix(in srgb, var(--text-normal) 10%, transparent);
   overflow: hidden;
-  break-before: avoid;
-  -webkit-column-break-before: avoid;
+  transition: opacity 120ms ease;
 }
 .fb-flow-scroll-thumb {
   position: absolute;
@@ -392,6 +442,51 @@
   border-radius: 99px;
   background-color: color-mix(in srgb, var(--text-normal) 38%, transparent);
   transition: left 60ms linear, width 60ms linear;
+}
+.fb-flow-expand-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(0.95);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px !important;
+  padding: 0 8px !important;
+  border-radius: 99px !important;
+  border: 1px solid var(--background-modifier-border-hover) !important;
+  background-color: var(--background-primary) !important;
+  color: var(--text-muted) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14) !important;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 130ms ease, transform 130ms ease, color 120ms ease, border-color 120ms ease;
+  z-index: 4;
+}
+.fb-flow-expand-icon {
+  display: inline-flex;
+  align-items: center;
+}
+.fb-flow-expand-icon svg {
+  width: 11px;
+  height: 11px;
+}
+.fb-flow-scroll-footer:hover .fb-flow-scroll-track {
+  opacity: 0.25;
+}
+.fb-flow-scroll-footer:hover .fb-flow-expand-btn,
+.fb-flow-expand-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+.fb-flow-expand-btn:hover {
+  color: var(--text-normal) !important;
+  border-color: color-mix(in srgb, var(--text-normal) 40%, transparent) !important;
 }
 
 /* ==========================================================================
@@ -673,6 +768,27 @@
   flex-shrink: 0;
 }
 
+/* [ID 6.7.13] 여러줄(트리) 모드 하위 폴더 행 전용 우측 진입 버튼 -> 호버·포커스 시에만 은은하게 표시 */
+.fb-row-drill-btn.clickable-icon {
+  padding: 2px;
+  opacity: 0;
+  pointer-events: none;
+  flex-shrink: 0;
+  transition: opacity 110ms ease;
+}
+.fb-row-drill-btn.clickable-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-row:hover .fb-row-drill-btn.clickable-icon,
+.fb-row.is-focused .fb-row-drill-btn.clickable-icon {
+  opacity: 0.75;
+  pointer-events: auto;
+}
+.fb-row-drill-btn.clickable-icon:hover {
+  opacity: 1 !important;
+}
+
 .fb-empty-card,
 .fb-empty-grid {
   margin: auto;
@@ -680,61 +796,6 @@
   color: var(--text-faint);
   padding: 20px 10px;
   text-align: center;
-}
-
-/* ==========================================================================
-   Quick Look 우측 슬라이드 드로어
-   ========================================================================== */
-.fb-quicklook {
-  width: 0;
-  flex-shrink: 0;
-  background-color: var(--background-primary);
-  border-left: 0 solid var(--divider-color, var(--background-modifier-border));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: width 200ms cubic-bezier(0.16, 1, 0.3, 1), border-left-width 120ms ease;
-}
-.fb-quicklook.is-open {
-  width: min(380px, 38%);
-  border-left-width: var(--divider-width, 1px);
-}
-
-.fb-ql-header {
-  height: 38px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--divider-color, var(--background-modifier-border));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.fb-ql-title {
-  font-size: var(--font-ui-small, 13px);
-  font-weight: 600;
-  color: var(--text-normal);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fb-ql-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.fb-ql-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 20px 28px;
-  user-select: text;
-}
-.fb-ql-empty {
-  color: var(--text-faint);
-  font-size: var(--font-ui-small, 13px);
-  text-align: center;
-  margin-top: 48px;
 }
 
 /* ==========================================================================

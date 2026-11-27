@@ -182,6 +182,12 @@ var DRAG_MIME = "application/x-obsidian-folder-board";
 var CARD_REORDER_MIME = "application/x-obsidian-folder-board-card";
 var CARD_HEADER_KEY = "__card_header__";
 var FLOW_WINDOW_SIZE = 15;
+var FLOW_COL_GAP = 24;
+var FLOW_CANVAS_PAD_LEFT = 14;
+var FLOW_COL_MIN_WIDTH = 180;
+var FLOW_COL_MAX_WIDTH = 560;
+var QL_SPLIT_MIN_RATIO = 0.18;
+var QL_SPLIT_MAX_RATIO = 0.75;
 function normalizeFolderRef(folder) {
   if (!folder || folder.isRoot() || folder.path === "/") return "";
   return folder.path;
@@ -208,12 +214,19 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.undoStack = [];
     this.quickLookOpen = false;
     this.quickLookPath = null;
+    // [ID 6.5.43] Space 네이티브 우측 분할 편집기(WorkspaceLeaf 1개 재사용) + 분할 비율 영속화
+    // -> 진짜 옵시디언 MarkdownView 1개만 재사용해 토글 플러그인·라이브 프리뷰를 100% 지원하면서 메모리 부담을 일반 탭 1개 수준으로 제한함.
+    this.quickEditLeaf = null;
+    this.splitSaveTimer = null;
+    this.splitApplyLockUntil = 0;
     this.renderedCards = [];
     // [ID 6.5.11] Option(Alt)+방향키 들고 이동 & Cmd+C/X/V 복사·잘라내기·붙여넣기 클립보드 상태
     // -> cut은 이동(원본 반투명 표시), copy는 재귀 복제(여러 폴더에 반복 붙여넣기 가능)로 동작함.
     this.carryPaths = [];
     this.carryCardIndex = 0;
     this.carryTargetFolderPath = null;
+    this.carryAnchorY = null;
+    this.carryAnchorX = null;
     this.clipboardMode = null;
     this.clipboardPaths = [];
     this.activeDragPaths = [];
@@ -233,9 +246,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     // -> e.defaultPrevented 대신 WeakSet을 사용해 옵시디언 기본 핫키(Cmd+D 등)가 preventDefault()를 걸어도 보드 동작이 정상 실행되게 함.
     this.handledKeyEvents = /* @__PURE__ */ new WeakSet();
     this.layoutBtns = [];
-    this.markdownComponent = null;
     this.vaultRefs = [];
     this.resizeObserver = null;
+    this.flowResizerRaf = null;
+    this.lastCanvasHeight = 0;
     // [ID 6.5.32] 뷰 전용 Obsidian Scope -> 옵시디언 글로벌 Cmd+F/A/D 단축키보다 우선해 보드 활성 시 안전하게 가로챔
     this.viewScope = null;
     this.scopeActive = false;
@@ -396,6 +410,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     });
   }
   async onClose() {
+    this.closeQuickEditLeaf(false);
     if (this.scopeActive && this.viewScope) {
       this.app.keymap.popScope(this.viewScope);
       this.scopeActive = false;
@@ -417,7 +432,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
     }
-    this.unloadMarkdownComponent();
+    if (this.splitSaveTimer !== null) {
+      window.clearTimeout(this.splitSaveTimer);
+      this.splitSaveTimer = null;
+    }
+    if (this.flowResizerRaf !== null) {
+      window.cancelAnimationFrame(this.flowResizerRaf);
+      this.flowResizerRaf = null;
+    }
     this.contentEl.empty();
   }
   buildShell() {
@@ -511,7 +533,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     controls.createDiv({ cls: "fb-divider" });
     this.qlBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "\uBBF8\uB9AC\uBCF4\uAE30 (Space)" }
+      attr: { "aria-label": "\uBE60\uB978 \uD3B8\uC9D1 (Space)" }
     });
     (0, import_obsidian3.setIcon)(this.qlBtnEl, "panel-right");
     this.qlBtnEl.addEventListener("click", () => {
@@ -522,10 +544,20 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const body = this.shellEl.createDiv({ cls: "fb-body" });
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
+    this.colResizersEl = this.canvasEl.createDiv({ cls: "fb-col-resizers" });
     this.resizeObserver = new ResizeObserver(() => {
       if (this.renderedCards.length === 0) return;
       if (this.plugin.settings.gridCols === "auto") {
         this.applyGridLayoutClasses(this.renderedCards.length);
+      } else if (this.plugin.settings.gridCols === "flow") {
+        const nextH = this.canvasEl.clientHeight;
+        if (Math.abs(nextH - this.lastCanvasHeight) >= 16 && this.plugin.settings.expandedFlowWindows.length > 0) {
+          this.lastCanvasHeight = nextH;
+          this.renderGridAndHeader();
+          return;
+        }
+        this.lastCanvasHeight = nextH;
+        this.scheduleFlowColResizersSync();
       }
     });
     this.resizeObserver.observe(this.canvasEl);
@@ -544,31 +576,6 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       },
       { passive: false }
     );
-    this.qlDrawerEl = body.createDiv({ cls: "fb-quicklook" });
-    const qlHeader = this.qlDrawerEl.createDiv({ cls: "fb-ql-header" });
-    this.qlTitleEl = qlHeader.createSpan({ cls: "fb-ql-title" });
-    const qlActions = qlHeader.createDiv({ cls: "fb-ql-actions" });
-    const qlOpenBtn = qlActions.createEl("button", {
-      cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "\uB178\uD2B8 \uC5F4\uAE30 (Enter)" }
-    });
-    (0, import_obsidian3.setIcon)(qlOpenBtn, "arrow-up-right");
-    qlOpenBtn.addEventListener("click", () => {
-      const targetFile = (this.quickLookPath ? getFileByPath(this.app, this.quickLookPath) : null) || this.getFocusedFile();
-      if (targetFile) void this.openFile(targetFile);
-    });
-    const qlCloseBtn = qlActions.createEl("button", {
-      cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "\uBBF8\uB9AC\uBCF4\uAE30 \uB2EB\uAE30" }
-    });
-    (0, import_obsidian3.setIcon)(qlCloseBtn, "x");
-    qlCloseBtn.addEventListener("click", () => {
-      this.quickLookOpen = false;
-      this.quickLookPath = null;
-      void this.updateQuickLook();
-      this.updateToolbarStates();
-    });
-    this.qlBodyEl = this.qlDrawerEl.createDiv({ cls: "fb-ql-body markdown-rendered" });
     this.shelfEl = this.shellEl.createDiv({
       cls: "fb-shelf is-collapsed",
       attr: { "data-drop-shelf": "true" }
@@ -628,12 +635,33 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.vaultRefs.push(this.app.vault.on("delete", scheduleRefresh));
     this.vaultRefs.push(this.app.workspace.on("active-leaf-change", () => this.syncScopeState()));
     this.vaultRefs.push(
+      this.app.workspace.on("layout-change", () => {
+        if (this.quickLookOpen && !this.isQuickEditLeafAlive()) {
+          this.quickLookOpen = false;
+          this.quickLookPath = null;
+          this.updateToolbarStates();
+        } else if (this.quickLookOpen) {
+          this.scheduleCaptureSplitRatio();
+        }
+      })
+    );
+    this.vaultRefs.push(
+      this.app.workspace.on("resize", () => {
+        if (this.quickLookOpen && this.isQuickEditLeafAlive()) {
+          this.scheduleCaptureSplitRatio();
+        }
+      })
+    );
+    this.vaultRefs.push(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian3.TFolder && this.plugin.isFolderExpanded(oldPath)) {
+        if (file instanceof import_obsidian3.TFolder) {
           void this.plugin.renameExpandedFolder(oldPath, file.path);
         }
         if (this.currentFolderPath === oldPath) {
           this.currentFolderPath = normalizeFolderStr(file.path);
+        }
+        if (this.quickLookPath === oldPath) {
+          this.quickLookPath = file.path;
         }
         scheduleRefresh();
       })
@@ -915,20 +943,28 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       }
     });
   }
+  clampFlowColWidth(width) {
+    return Math.max(FLOW_COL_MIN_WIDTH, Math.min(Math.round(width), FLOW_COL_MAX_WIDTH));
+  }
   applyGridLayoutClasses(cardCount) {
     const prefLayout = this.plugin.settings.gridCols;
     const isHorizontalCanvas = prefLayout === "scroll" || prefLayout === "flow";
     this.canvasEl.toggleClass("is-horizontal-scroll", isHorizontalCanvas);
     if (prefLayout === "scroll") {
+      this.gridEl.style.removeProperty("--fb-flow-col-width");
       this.gridEl.className = "fb-grid fb-layout-scroll";
     } else if (prefLayout === "flow") {
-      this.gridEl.className = "fb-grid fb-layout-flow";
+      const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
+      this.gridEl.style.setProperty("--fb-flow-col-width", `${colW}px`);
+      this.gridEl.className = cardCount === 0 ? "fb-grid fb-layout-flow is-empty" : "fb-grid fb-layout-flow";
     } else if (prefLayout === "auto") {
+      this.gridEl.style.removeProperty("--fb-flow-col-width");
       const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
       const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
       const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
       this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
     } else {
+      this.gridEl.style.removeProperty("--fb-flow-col-width");
       const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
       const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
       const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
@@ -951,6 +987,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.applyGridLayoutClasses(cards.length);
     if (cards.length === 0) {
       this.gridEl.createDiv({ cls: "fb-empty-grid", text: "\uC77C\uCE58\uD558\uB294 \uD56D\uBAA9\uC774 \uC5C6\uC2B5\uB2C8\uB2E4" });
+      this.colResizersEl?.empty();
       return;
     }
     const isCarrying = this.carryPaths.length > 0;
@@ -958,12 +995,113 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     cards.forEach((cardModel, cardIdx) => {
       this.renderCardElement(this.gridEl, cardModel, cardIdx, isCarrying, isFlowMode);
     });
+    if (isFlowMode) {
+      this.lastCanvasHeight = this.canvasEl.clientHeight;
+      this.scheduleFlowColResizersSync();
+    } else {
+      this.colResizersEl?.empty();
+    }
+  }
+  // [ID 6.5.46] 여러줄 모드 호버 전용 다단 너비 조절 바 동기화
+  // -> 고정 구분선(column-rule)을 제거하고 열 사이 여백에만 투명 히트존을 배치해 호버/드래그 시 조절 바가 나타나며,
+  // -> k번째 경계 드래그 시 dx/k 비율로 열 폭을 갱신해 핸들이 커서를 1:1로 추적하고 설정에 영속 저장함.
+  scheduleFlowColResizersSync() {
+    if (this.flowResizerRaf !== null) {
+      window.cancelAnimationFrame(this.flowResizerRaf);
+    }
+    this.flowResizerRaf = window.requestAnimationFrame(() => {
+      this.flowResizerRaf = null;
+      this.syncFlowColResizers();
+    });
+  }
+  positionFlowColResizer(handleEl, colIndex, colWidth) {
+    const gapCenter = FLOW_CANVAS_PAD_LEFT + colIndex * colWidth + (colIndex - 1) * FLOW_COL_GAP + FLOW_COL_GAP / 2;
+    handleEl.style.left = `${Math.round(gapCenter - 7)}px`;
+  }
+  syncFlowColResizers() {
+    if (!this.colResizersEl) return;
+    this.colResizersEl.empty();
+    if (this.plugin.settings.gridCols !== "flow" || this.renderedCards.length === 0) return;
+    const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
+    const gridRect = this.gridEl.getBoundingClientRect();
+    const probes = Array.from(
+      this.gridEl.querySelectorAll(".fb-row, .fb-card-header, .fb-empty-card")
+    );
+    let maxRight = gridRect.left + colW;
+    for (const el of probes) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.right > maxRight) {
+        maxRight = r.right;
+      }
+    }
+    const totalSpan = Math.max(colW, maxRight - gridRect.left);
+    const numCols = Math.max(1, Math.round((totalSpan + FLOW_COL_GAP) / (colW + FLOW_COL_GAP)));
+    for (let k = 1; k <= numCols; k++) {
+      const handle = this.colResizersEl.createDiv({
+        cls: "fb-col-resizer",
+        attr: {
+          "data-col-index": String(k),
+          "aria-label": "\uB2E4\uB2E8 \uB108\uBE44 \uC870\uC808 (\uB4DC\uB798\uADF8)"
+        }
+      });
+      this.positionFlowColResizer(handle, k, colW);
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
+        let latestW = startW;
+        handle.addClass("is-dragging");
+        document.body.style.cursor = "col-resize";
+        const allHandles = Array.from(this.colResizersEl.querySelectorAll(".fb-col-resizer"));
+        const onMove = (ev) => {
+          const dx = ev.clientX - startX;
+          latestW = this.clampFlowColWidth(startW + dx / k);
+          this.gridEl.style.setProperty("--fb-flow-col-width", `${latestW}px`);
+          for (const h of allHandles) {
+            const idx = Number(h.dataset.colIndex) || 1;
+            this.positionFlowColResizer(h, idx, latestW);
+          }
+        };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          handle.removeClass("is-dragging");
+          document.body.style.cursor = "";
+          this.plugin.settings.flowColumnWidth = latestW;
+          void this.plugin.saveSettings();
+          this.scheduleFlowColResizersSync();
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+      });
+    }
   }
   getFlowWindowKey(cardModel) {
     return cardModel.isRootCard ? "__root__" : cardModel.folderPath;
   }
+  // [ID 6.5.47] 여러줄 모드 카드 1열 최대 확장 길이 계산
+  // -> 스크롤바 호버 확장 버튼 클릭 시 현재 캔버스 세로 높이에 맞춰 최대 1열까지만 확장되도록 동적으로 행 수를 산출함.
+  getFlowMaxOneColumnItems(cardModel) {
+    const canvasH = this.canvasEl?.clientHeight || 680;
+    const sampleRow = this.gridEl?.querySelector(".fb-row");
+    const measuredRowH = sampleRow ? sampleRow.getBoundingClientRect().height : 28;
+    const rowH = Math.max(24, Math.min(36, Math.round(measuredRowH) + 1));
+    const chromeH = cardModel.isRootCard ? 46 : 94;
+    const usableH = Math.max(rowH * (FLOW_WINDOW_SIZE + 2), canvasH - chromeH);
+    return Math.max(FLOW_WINDOW_SIZE + 2, Math.floor(usableH / rowH));
+  }
+  getFlowWindowLimit(cardModel) {
+    const key = this.getFlowWindowKey(cardModel);
+    if (!this.plugin.isFlowWindowExpanded(key)) return FLOW_WINDOW_SIZE;
+    return Math.min(cardModel.items.length, this.getFlowMaxOneColumnItems(cardModel));
+  }
   getFlowWindowOffset(cardModel) {
-    const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+    const limit = this.getFlowWindowLimit(cardModel);
+    const maxOffset = Math.max(0, cardModel.items.length - limit);
     const saved = this.flowScrollOffsets.get(this.getFlowWindowKey(cardModel)) || 0;
     const clamped = Math.max(0, Math.min(saved, maxOffset));
     if (clamped !== saved) {
@@ -971,16 +1109,18 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     }
     return clamped;
   }
-  formatFlowCountLabel(cardModel, isWindowed) {
-    if (!isWindowed) return String(cardModel.totalCount);
+  formatFlowCountLabel(cardModel, isScrollableWindow) {
+    if (!isScrollableWindow) return String(cardModel.totalCount);
+    const limit = this.getFlowWindowLimit(cardModel);
     const offset = this.getFlowWindowOffset(cardModel);
-    const end = Math.min(cardModel.items.length, offset + FLOW_WINDOW_SIZE);
+    const end = Math.min(cardModel.items.length, offset + limit);
     return `${offset + 1}\u2013${end} / ${cardModel.items.length}`;
   }
   updateFlowWindowDOM(cardIdx) {
     const cardModel = this.renderedCards[cardIdx];
     if (!cardModel || this.plugin.settings.gridCols !== "flow") return;
-    if (cardModel.isCollapsedSection || cardModel.items.length <= FLOW_WINDOW_SIZE) return;
+    const limit = this.getFlowWindowLimit(cardModel);
+    if (cardModel.isCollapsedSection || cardModel.items.length <= limit) return;
     const cardEl = this.gridEl.querySelector(`.fb-card[data-card-index="${cardIdx}"]`);
     if (!cardEl) return;
     const listEl = cardEl.querySelector(".fb-card-body");
@@ -988,7 +1128,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const offset = this.getFlowWindowOffset(cardModel);
     const isCarrying = this.carryPaths.length > 0;
     listEl.empty();
-    this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, offset, offset + FLOW_WINDOW_SIZE);
+    this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, offset, offset + limit);
     const countEl = cardEl.querySelector(".fb-count");
     if (countEl) {
       countEl.setText(this.formatFlowCountLabel(cardModel, true));
@@ -997,7 +1137,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (thumbEl) {
       const total = cardModel.items.length;
       const pctLeft = offset / total * 100;
-      const pctWidth = Math.max(8, FLOW_WINDOW_SIZE / total * 100);
+      const pctWidth = Math.max(8, limit / total * 100);
       thumbEl.style.left = `${pctLeft}%`;
       thumbEl.style.width = `${pctWidth}%`;
     }
@@ -1005,16 +1145,18 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   ensureFlowWindowIncludes(cardIdx, itemIndex) {
     if (this.plugin.settings.gridCols !== "flow") return;
     const cardModel = this.renderedCards[cardIdx];
-    if (!cardModel || cardModel.isCollapsedSection || cardModel.items.length <= FLOW_WINDOW_SIZE) return;
+    if (!cardModel || cardModel.isCollapsedSection) return;
+    const limit = this.getFlowWindowLimit(cardModel);
+    if (cardModel.items.length <= limit) return;
     const key = this.getFlowWindowKey(cardModel);
     const curOffset = this.getFlowWindowOffset(cardModel);
     let nextOffset = curOffset;
     if (itemIndex < curOffset) {
       nextOffset = itemIndex;
-    } else if (itemIndex >= curOffset + FLOW_WINDOW_SIZE) {
-      nextOffset = itemIndex - FLOW_WINDOW_SIZE + 1;
+    } else if (itemIndex >= curOffset + limit) {
+      nextOffset = itemIndex - limit + 1;
     }
-    const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+    const maxOffset = Math.max(0, cardModel.items.length - limit);
     nextOffset = Math.max(0, Math.min(nextOffset, maxOffset));
     if (nextOffset !== curOffset) {
       this.flowScrollOffsets.set(key, nextOffset);
@@ -1024,17 +1166,20 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   renderCardElement(parentEl, cardModel, cardIdx, isCarrying, isFlowMode) {
     const isFocusedCard = !isCarrying && cardIdx === this.focusedCardIndex;
     const isCarryCard = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === cardModel.folderPath;
-    const isWindowed = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_WINDOW_SIZE;
+    const winKey = this.getFlowWindowKey(cardModel);
+    const isLargeFlowCard = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_WINDOW_SIZE;
+    const windowLimit = isLargeFlowCard ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
+    const isScrollableWindow = isLargeFlowCard && cardModel.items.length > windowLimit;
+    const isExpandedWindow = isLargeFlowCard && this.plugin.isFlowWindowExpanded(winKey);
     const cardEl = parentEl.createDiv({
       cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
       attr: {
         "data-drop-folder": cardModel.folderPath,
         "data-card-index": String(cardIdx),
-        ...isWindowed ? { "data-windowed": "true" } : {}
+        ...isScrollableWindow ? { "data-windowed": "true" } : {}
       }
     });
-    if (isWindowed) {
-      const winKey = this.getFlowWindowKey(cardModel);
+    if (isScrollableWindow) {
       cardEl.addEventListener(
         "wheel",
         (e) => {
@@ -1049,8 +1194,9 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
             return;
           }
           this.flowWheelAccum.set(winKey, accum - rowSteps * stepPx);
+          const curLimit = this.getFlowWindowLimit(cardModel);
           const curOffset = this.getFlowWindowOffset(cardModel);
-          const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+          const maxOffset = Math.max(0, cardModel.items.length - curLimit);
           const nextOffset = Math.max(0, Math.min(curOffset + rowSteps, maxOffset));
           if (nextOffset !== curOffset) {
             this.flowScrollOffsets.set(winKey, nextOffset);
@@ -1088,7 +1234,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
       metaEl.createSpan({
         cls: "fb-count",
-        text: this.formatFlowCountLabel(cardModel, isWindowed)
+        text: this.formatFlowCountLabel(cardModel, isScrollableWindow)
       });
       headerEl.setAttr("draggable", "true");
       headerEl.addEventListener(
@@ -1104,7 +1250,9 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         e.stopPropagation();
         this.navigateToFolder(cardModel.folderPath);
       });
-      headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
+      if (!isFlowMode) {
+        headerEl.addEventListener("dblclick", () => this.navigateToFolder(cardModel.folderPath));
+      }
       headerEl.addEventListener("contextmenu", (e) => {
         const folder = getFolderByPath(this.app, cardModel.folderPath);
         if (folder) this.openContextMenu(e, folder);
@@ -1146,19 +1294,46 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       listEl.createDiv({ cls: "fb-empty-card", text: "\uBE44\uC5B4 \uC788\uC74C" });
       return;
     }
-    const startIdx = isWindowed ? this.getFlowWindowOffset(cardModel) : 0;
-    const endIdx = isWindowed ? Math.min(cardModel.items.length, startIdx + FLOW_WINDOW_SIZE) : cardModel.items.length;
+    const startIdx = isScrollableWindow ? this.getFlowWindowOffset(cardModel) : 0;
+    const endIdx = isScrollableWindow ? Math.min(cardModel.items.length, startIdx + windowLimit) : cardModel.items.length;
     this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx);
-    if (isWindowed) {
-      const track = cardEl.createDiv({ cls: "fb-flow-scroll-track" });
+    if (isLargeFlowCard) {
+      const footer = cardEl.createDiv({
+        cls: "fb-flow-scroll-footer" + (isExpandedWindow ? " is-expanded" : "")
+      });
+      const track = footer.createDiv({ cls: "fb-flow-scroll-track" });
       const thumb = track.createDiv({ cls: "fb-flow-scroll-thumb" });
       const total = cardModel.items.length;
-      thumb.style.left = `${startIdx / total * 100}%`;
-      thumb.style.width = `${Math.max(8, FLOW_WINDOW_SIZE / total * 100)}%`;
+      if (isScrollableWindow) {
+        thumb.style.left = `${startIdx / total * 100}%`;
+        thumb.style.width = `${Math.max(8, windowLimit / total * 100)}%`;
+      } else {
+        thumb.style.left = "0%";
+        thumb.style.width = "100%";
+      }
+      const expandBtn = footer.createEl("button", {
+        cls: "fb-flow-expand-btn",
+        attr: {
+          type: "button",
+          "aria-label": isExpandedWindow ? "\uAE30\uBCF8 \uAE38\uC774(15\uAC1C)\uB85C \uC904\uC774\uAE30" : "\uCD5C\uB300 1\uC5F4 \uAE38\uC774\uB85C \uD3BC\uCE58\uAE30"
+        }
+      });
+      const btnIcon = expandBtn.createSpan({ cls: "fb-flow-expand-icon" });
+      (0, import_obsidian3.setIcon)(btnIcon, isExpandedWindow ? "chevrons-up" : "chevrons-down");
+      expandBtn.createSpan({ text: isExpandedWindow ? "\uC904\uC774\uAE30" : "\uD3BC\uCE58\uAE30" });
+      const toggleExpand = async (e) => {
+        e.stopPropagation();
+        await this.plugin.toggleFlowWindowExpanded(winKey);
+        this.renderGridAndHeader();
+        this.scrollFocusedIntoView();
+      };
+      expandBtn.addEventListener("click", (e) => void toggleExpand(e));
+      footer.addEventListener("click", (e) => void toggleExpand(e));
     }
   }
   renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx) {
     const cutSet = new Set(this.clipboardMode === "cut" ? this.clipboardPaths : []);
+    const isFlowMode = this.plugin.settings.gridCols === "flow";
     for (let itemIdx = startIdx; itemIdx < endIdx && itemIdx < cardModel.items.length; itemIdx++) {
       const item = cardModel.items[itemIdx];
       const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
@@ -1188,6 +1363,17 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         if (item.childCount !== void 0) {
           row.createSpan({ cls: "fb-row-count", text: String(item.childCount) });
         }
+        if (isFlowMode) {
+          const rowDrillBtn = row.createEl("button", {
+            cls: "clickable-icon fb-row-drill-btn",
+            attr: { "aria-label": `${item.name} \uC5F4\uAE30` }
+          });
+          (0, import_obsidian3.setIcon)(rowDrillBtn, "arrow-right");
+          rowDrillBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this.enterInlineSubfolderLevel(item.path);
+          });
+        }
         row.addEventListener("click", async (e) => {
           e.stopPropagation();
           if (e.shiftKey && cardIdx === this.focusedCardIndex) {
@@ -1214,10 +1400,12 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
           await this.plugin.toggleFolderExpanded(item.path);
           this.renderGridAndHeader();
         });
-        row.addEventListener("dblclick", (e) => {
-          e.stopPropagation();
-          this.enterInlineSubfolderLevel(item.path);
-        });
+        if (!isFlowMode) {
+          row.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            this.enterInlineSubfolderLevel(item.path);
+          });
+        }
         row.addEventListener("contextmenu", (e) => {
           const folder = getFolderByPath(this.app, item.path);
           if (folder) this.openContextMenu(e, folder);
@@ -1309,37 +1497,140 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.clipboardMode = null;
     this.carryPillEl.addClass("is-hidden");
   }
-  async updateQuickLook(targetFileOverride) {
-    this.qlDrawerEl.toggleClass("is-open", this.quickLookOpen);
-    if (!this.quickLookOpen) return;
-    const file = targetFileOverride !== void 0 ? targetFileOverride : this.getFocusedFile();
-    this.quickLookPath = file ? file.path : null;
-    this.unloadMarkdownComponent();
-    this.qlBodyEl.empty();
-    if (!file) {
-      this.qlTitleEl.setText("\uBBF8\uB9AC\uBCF4\uAE30");
-      this.qlBodyEl.createDiv({ cls: "fb-ql-empty", text: "\uC120\uD0DD\uB41C \uD30C\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4" });
+  clampQuickEditSplitRatio(ratio) {
+    return Math.max(QL_SPLIT_MIN_RATIO, Math.min(QL_SPLIT_MAX_RATIO, ratio));
+  }
+  isQuickEditLeafAlive() {
+    if (!this.quickEditLeaf) return false;
+    let alive = false;
+    this.app.workspace.iterateAllLeaves((l) => {
+      if (l === this.quickEditLeaf) alive = true;
+    });
+    if (!alive) this.quickEditLeaf = null;
+    return alive;
+  }
+  // [ID 6.5.44] 우측 분할 편집기 너비 비율 영속화 (옵시디언 기본 분할선 드래그 감지 및 복원)
+  // -> 생성 직후 50/50 초기 레이아웃 이벤트가 저장값을 덮어쓰지 않도록 splitApplyLockUntil로 보호함.
+  applySavedQuickEditSplitRatio() {
+    if (!this.isQuickEditLeafAlive() || !this.quickEditLeaf) return;
+    const boardParent = this.leaf.parent;
+    const editParent = this.quickEditLeaf.parent;
+    if (!boardParent || !editParent || boardParent === editParent || boardParent.parent !== editParent.parent) {
       return;
     }
-    this.qlTitleEl.setText(file.extension === "md" ? file.basename : file.name);
-    if (file.extension !== "md") {
-      this.qlBodyEl.createDiv({ cls: "fb-ql-empty", text: file.name });
-      return;
+    const ratio = this.clampQuickEditSplitRatio(this.plugin.settings.quickLookSplitRatio);
+    const curBoardDim = typeof boardParent.dimension === "number" && boardParent.dimension > 0 ? boardParent.dimension : 50;
+    const curEditDim = typeof editParent.dimension === "number" && editParent.dimension > 0 ? editParent.dimension : 50;
+    const pairTotal = curBoardDim + curEditDim;
+    const nextEditDim = Math.max(10, pairTotal * ratio);
+    const nextBoardDim = Math.max(10, pairTotal - nextEditDim);
+    this.splitApplyLockUntil = Date.now() + 260;
+    if (typeof boardParent.setDimension === "function" && typeof editParent.setDimension === "function") {
+      boardParent.setDimension(nextBoardDim);
+      editParent.setDimension(nextEditDim);
+    } else if (boardParent.containerEl && editParent.containerEl) {
+      boardParent.containerEl.style.flexGrow = String(nextBoardDim);
+      editParent.containerEl.style.flexGrow = String(nextEditDim);
     }
-    try {
-      const content = await this.app.vault.cachedRead(file);
-      this.markdownComponent = new import_obsidian3.Component();
-      this.markdownComponent.load();
-      await import_obsidian3.MarkdownRenderer.render(this.app, content, this.qlBodyEl, file.path, this.markdownComponent);
-    } catch {
-      this.qlBodyEl.createDiv({ cls: "fb-ql-empty", text: "\uB0B4\uC6A9\uC744 \uBD88\uB7EC\uC62C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4" });
+    boardParent.parent?.recomputeChildrenDimensions?.();
+  }
+  captureQuickEditSplitRatio(force = false) {
+    if (!force && Date.now() < this.splitApplyLockUntil) return;
+    if (!this.isQuickEditLeafAlive() || !this.quickEditLeaf) return;
+    const boardParent = this.leaf.parent;
+    const editParent = this.quickEditLeaf.parent;
+    if (!boardParent?.containerEl || !editParent?.containerEl || boardParent === editParent) return;
+    const bw = boardParent.containerEl.clientWidth;
+    const ew = editParent.containerEl.clientWidth;
+    if (bw <= 0 || ew <= 0) return;
+    const ratio = this.clampQuickEditSplitRatio(ew / (bw + ew));
+    if (Math.abs(ratio - this.plugin.settings.quickLookSplitRatio) >= 0.01) {
+      this.plugin.settings.quickLookSplitRatio = Number(ratio.toFixed(3));
+      void this.plugin.saveSettings();
     }
   }
-  unloadMarkdownComponent() {
-    if (this.markdownComponent) {
-      this.markdownComponent.unload();
-      this.markdownComponent = null;
+  scheduleCaptureSplitRatio() {
+    if (Date.now() < this.splitApplyLockUntil) return;
+    if (this.splitSaveTimer !== null) {
+      window.clearTimeout(this.splitSaveTimer);
     }
+    this.splitSaveTimer = window.setTimeout(() => {
+      this.splitSaveTimer = null;
+      this.captureQuickEditSplitRatio();
+    }, 220);
+  }
+  closeQuickEditLeaf(refocusBoard = true) {
+    this.captureQuickEditSplitRatio(true);
+    this.quickLookOpen = false;
+    this.quickLookPath = null;
+    if (this.isQuickEditLeafAlive() && this.quickEditLeaf) {
+      const leafToClose = this.quickEditLeaf;
+      this.quickEditLeaf = null;
+      leafToClose.detach();
+    }
+    if (refocusBoard) {
+      this.updateToolbarStates();
+      this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+      requestAnimationFrame(() => {
+        this.shellEl?.focus();
+        this.syncScopeState();
+        if (this.plugin.settings.gridCols === "flow") {
+          this.scheduleFlowColResizersSync();
+        }
+      });
+    }
+  }
+  // [ID 6.5.45] Space 네이티브 우측 분할 편집기 열기/교체/닫기
+  // -> 옵시디언 공식 createLeafBySplit으로 진짜 편집기 탭 1개만 우측에 띄우고,
+  // -> 방향키 이동 시 active: false로 내용만 교체해 보드 포커스를 유지하면서도 toggle-premium·라이브 프리뷰를 100% 살림.
+  async updateQuickLook(targetFileOverride) {
+    if (!this.quickLookOpen) {
+      this.closeQuickEditLeaf(true);
+      return;
+    }
+    const file = targetFileOverride !== void 0 ? targetFileOverride : this.getFocusedFile();
+    if (!file) {
+      if (!this.isQuickEditLeafAlive()) {
+        this.quickLookOpen = false;
+        this.quickLookPath = null;
+        this.updateToolbarStates();
+      }
+      return;
+    }
+    const alive = this.isQuickEditLeafAlive();
+    const currentViewFile = this.quickEditLeaf?.view?.file;
+    if (alive && currentViewFile?.path === file.path) {
+      this.quickLookPath = file.path;
+      return;
+    }
+    let createdNew = false;
+    if (!alive) {
+      this.splitApplyLockUntil = Date.now() + 350;
+      this.quickEditLeaf = this.app.workspace.createLeafBySplit(this.leaf, "vertical", false);
+      createdNew = true;
+      requestAnimationFrame(() => this.applySavedQuickEditSplitRatio());
+    }
+    if (!this.quickEditLeaf) return;
+    this.quickLookPath = file.path;
+    try {
+      await this.quickEditLeaf.openFile(file, {
+        active: false,
+        state: file.extension === "md" ? { mode: "source" } : void 0
+      });
+    } catch {
+      return;
+    }
+    if (createdNew) {
+      requestAnimationFrame(() => this.applySavedQuickEditSplitRatio());
+    }
+    this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+    requestAnimationFrame(() => {
+      this.shellEl?.focus();
+      this.syncScopeState();
+      if (this.plugin.settings.gridCols === "flow") {
+        this.scheduleFlowColResizersSync();
+      }
+    });
   }
   // =========================================================
   // 포커스 · 범위 다중 선택 · 탐색 · 파일 열기
@@ -1503,16 +1794,9 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.scrollFocusedIntoView();
     }
   }
-  // [ID 6.5.17] 카드 내부 하위 폴더 Enter 시 한 단계 상위(형제 폴더들이 함께 보이는 레벨)로 이동
-  // -> 사용자가 하위 폴더를 눌렀을 때 같은 레벨의 다른 형제 폴더 카드들도 한눈에 비교할 수 있도록 부모로 진입하고 해당 카드에 포커스함.
+  // [ID 6.5.17] 카드 내부 하위 폴더 진입 -> 직관적으로 선택한 하위 폴더 안으로 직접 이동함.
   enterInlineSubfolderLevel(subfolderPath) {
-    const folder = getFolderByPath(this.app, subfolderPath);
-    const parentPath = normalizeFolderRef(folder?.parent);
-    if (parentPath === this.currentFolderPath) {
-      this.navigateToFolder(subfolderPath);
-      return;
-    }
-    this.navigateToFolder(parentPath, subfolderPath);
+    this.navigateToFolder(subfolderPath);
   }
   goUp() {
     if (!this.currentFolderPath) return;
@@ -1571,17 +1855,38 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.carryPaths = sources;
       this.carryCardIndex = this.focusedCardIndex;
       this.carryTargetFolderPath = null;
+      const anchorRect = this.getActiveAnchorRect();
+      this.carryAnchorX = anchorRect ? anchorRect.left : null;
+      this.carryAnchorY = anchorRect ? anchorRect.top + anchorRect.height / 2 : null;
     }
     if (direction === "left" || direction === "right") {
-      const delta = direction === "right" ? 1 : -1;
-      const total = this.renderedCards.length;
-      for (let step = 1; step <= total; step++) {
-        const candidateIdx = (this.carryCardIndex + delta * step + total) % total;
-        const candidatePath = this.renderedCards[candidateIdx].folderPath;
-        if (!this.isInvalidDropDest(candidatePath, this.carryPaths)) {
-          this.carryCardIndex = candidateIdx;
-          this.carryTargetFolderPath = candidatePath;
-          break;
+      let spatialHandled = false;
+      if (this.plugin.settings.gridCols === "flow" && this.carryAnchorX !== null && this.carryAnchorY !== null) {
+        const excludePath = justStarted ? normalizeFolderStr(this.renderedCards[this.focusedCardIndex]?.folderPath) : this.carryTargetFolderPath !== null ? normalizeFolderStr(this.carryTargetFolderPath) : null;
+        const found = this.findFlowHorizontalCarryTarget(
+          direction,
+          this.carryAnchorX,
+          this.carryAnchorY,
+          excludePath
+        );
+        if (found) {
+          this.carryCardIndex = found.cardIdx;
+          this.carryTargetFolderPath = found.folderPath;
+          this.carryAnchorX = found.rect.left;
+          spatialHandled = true;
+        }
+      }
+      if (!spatialHandled) {
+        const delta = direction === "right" ? 1 : -1;
+        const total = this.renderedCards.length;
+        for (let step = 1; step <= total; step++) {
+          const candidateIdx = (this.carryCardIndex + delta * step + total) % total;
+          const candidatePath = this.renderedCards[candidateIdx].folderPath;
+          if (!this.isInvalidDropDest(candidatePath, this.carryPaths)) {
+            this.carryCardIndex = candidateIdx;
+            this.carryTargetFolderPath = candidatePath;
+            break;
+          }
         }
       }
     } else {
@@ -1604,6 +1909,16 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         const nextIdx = curIdx === -1 ? 0 : (curIdx + delta + targets.length) % targets.length;
         this.carryTargetFolderPath = targets[nextIdx].path;
       }
+      const targetEl = this.gridEl.querySelector(
+        `.fb-row[data-card-index="${this.carryCardIndex}"][data-drop-folder="${CSS.escape(this.carryTargetFolderPath || "")}"]`
+      ) || this.gridEl.querySelector(
+        `.fb-card[data-card-index="${this.carryCardIndex}"] .fb-card-header`
+      ) || this.gridEl.querySelector(`.fb-card[data-card-index="${this.carryCardIndex}"]`);
+      if (targetEl) {
+        const r = targetEl.getBoundingClientRect();
+        this.carryAnchorX = r.left;
+        this.carryAnchorY = r.top + r.height / 2;
+      }
     }
     this.syncFocusAndSelectionDOM();
     this.renderSelectionBar();
@@ -1617,6 +1932,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const destCardIdx = this.carryCardIndex;
     this.carryPaths = [];
     this.carryTargetFolderPath = null;
+    this.carryAnchorX = null;
+    this.carryAnchorY = null;
     this.renderCarryPill();
     this.focusedCardIndex = destCardIdx;
     void this.moveFiles(paths, dest);
@@ -1625,6 +1942,8 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     if (this.carryPaths.length === 0) return;
     this.carryPaths = [];
     this.carryTargetFolderPath = null;
+    this.carryAnchorX = null;
+    this.carryAnchorY = null;
     this.syncFocusAndSelectionDOM();
     this.renderSelectionBar();
     this.renderCarryPill();
@@ -2001,31 +2320,68 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.scrollFocusedIntoView();
     }
   }
+  // [ID 6.5.51] 포커스 레벨 맞춤형 [ / ] 접기·펼치기
+  // -> 직속 영역에 포커스가 있으면 보드 전체를 일괄 접기/펼치기하고,
+  // -> 특정 폴더 카드나 하위 폴더 내부에 포커스가 있으면 해당 폴더 스코프의 하위 폴더들만 레벨에 맞게 접고 펼침.
   async setAllSubfoldersExpanded(expanded) {
-    const folderPaths = [];
-    const sectionPaths = [];
-    const collectAllSubfolders = (folder) => {
+    const collectAllSubfolders = (folder, out) => {
       for (const child of folder.children) {
         if (child instanceof import_obsidian3.TFolder) {
           const p = normalizeFolderRef(child);
-          if (p) folderPaths.push(p);
-          collectAllSubfolders(child);
+          if (p) out.push(p);
+          collectAllSubfolders(child, out);
         }
       }
     };
-    for (const card of this.renderedCards) {
-      if (card.isRootCard) continue;
-      sectionPaths.push(card.folderPath);
-      const folder = getFolderByPath(this.app, card.folderPath);
-      if (folder) collectAllSubfolders(folder);
+    const isFlowMode = this.plugin.settings.gridCols === "flow";
+    const curCard = this.renderedCards[this.focusedCardIndex];
+    if (!curCard || curCard.isRootCard) {
+      const folderPaths = [];
+      const sectionPaths = [];
+      for (const card of this.renderedCards) {
+        if (card.isRootCard) continue;
+        sectionPaths.push(card.folderPath);
+        const folder = getFolderByPath(this.app, card.folderPath);
+        if (folder) collectAllSubfolders(folder, folderPaths);
+      }
+      if (isFlowMode && sectionPaths.length > 0) {
+        await this.plugin.setFlowSectionsCollapsedBatch(sectionPaths, !expanded);
+      }
+      if (folderPaths.length > 0) {
+        await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+      }
+      this.renderGridAndHeader();
+      return;
     }
-    if (this.plugin.settings.gridCols === "flow" && sectionPaths.length > 0) {
-      await this.plugin.setFlowSectionsCollapsedBatch(sectionPaths, !expanded);
+    const targetFolderPath = this.getFocusedTargetFolderPath();
+    const targetFolder = getFolderByPath(this.app, targetFolderPath);
+    const isCardRootScope = targetFolderPath === curCard.folderPath;
+    const subfolders = [];
+    if (targetFolder) {
+      collectAllSubfolders(targetFolder, subfolders);
     }
-    if (folderPaths.length > 0) {
-      await this.plugin.setFoldersExpandedBatch(folderPaths, expanded);
+    if (expanded) {
+      if (isFlowMode && this.plugin.isFlowSectionCollapsed(curCard.folderPath)) {
+        await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], false);
+      }
+      const toExpand = isCardRootScope ? subfolders : [targetFolderPath, ...subfolders];
+      if (toExpand.length > 0) {
+        await this.plugin.setFoldersExpandedBatch(toExpand, true);
+      }
+    } else {
+      const hasExpandedDescendant = subfolders.some((p) => this.plugin.isFolderExpanded(p));
+      if (hasExpandedDescendant) {
+        await this.plugin.setFoldersExpandedBatch(subfolders, false);
+      } else if (!isCardRootScope) {
+        await this.plugin.setFoldersExpandedBatch([targetFolderPath], false);
+        this.focusedItemKey = `folder:${targetFolderPath}`;
+      } else if (isFlowMode) {
+        await this.plugin.setFlowSectionsCollapsedBatch([curCard.folderPath], true);
+        this.focusedItemKey = CARD_HEADER_KEY;
+      }
     }
     this.renderGridAndHeader();
+    this.scrollFocusedIntoView();
   }
   jumpToCardByIndex(cardIdx) {
     if (cardIdx < 0 || cardIdx >= this.renderedCards.length) return;
@@ -2348,48 +2704,112 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     }
     return bestIdx;
   }
-  // [ID 6.5.40] 여러줄 모드(flow)에서 좌/우 방향키 시 물리적으로 인접한 열의 가장 가까운 섹션 탐색
-  findHorizontalNeighborCard(cardIdx, direction) {
-    const cardEls = Array.from(this.gridEl.querySelectorAll(".fb-card"));
-    const curEl = cardEls.find((el) => Number(el.dataset.cardIndex) === cardIdx);
-    if (!curEl) return -1;
-    const curRect = curEl.getBoundingClientRect();
+  // [ID 6.5.40] 여러줄 모드(flow)에서 현재 포커스된 파일/헤더의 실제 화면 좌표(Y) 기준 옆 열 탐색
+  // -> 같은 폴더 내에서도 상단 파일과 하단 파일 옆에 놓인 폴더가 다르므로, 카드 최상단이 아닌 현재 행 위치에서 수평 인접 항목·폴더를 찾음.
+  getActiveAnchorRect() {
+    const el = this.gridEl.querySelector(".fb-row.is-focused") || this.gridEl.querySelector(".fb-card-header.is-header-focused") || this.gridEl.querySelector(`.fb-card[data-card-index="${this.focusedCardIndex}"]`);
+    return el ? el.getBoundingClientRect() : null;
+  }
+  findFlowHorizontalNavTarget(direction) {
+    const anchor = this.getActiveAnchorRect();
+    if (!anchor) return null;
+    const curX = anchor.left;
+    const curCenterY = anchor.top + anchor.height / 2;
     const colThreshold = 40;
-    let bestIdx = -1;
+    const nodes = Array.from(
+      this.gridEl.querySelectorAll(".fb-row, .fb-card-header, .fb-empty-card")
+    );
+    const candidates = [];
+    for (const el of nodes) {
+      const cardEl = el.closest(".fb-card");
+      if (!cardEl) continue;
+      const cardIdx = Number(cardEl.dataset.cardIndex);
+      if (Number.isNaN(cardIdx)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      const itemKey = el.classList.contains("fb-row") ? el.dataset.itemKey || "" : CARD_HEADER_KEY;
+      candidates.push({ cardIdx, itemKey, rect });
+    }
+    let best = null;
     let bestColDist = Infinity;
     let bestRowDist = Infinity;
-    for (const el of cardEls) {
-      const idx = Number(el.dataset.cardIndex);
-      if (idx === cardIdx) continue;
-      const r = el.getBoundingClientRect();
-      const dx = r.left - curRect.left;
+    for (const c of candidates) {
+      const dx = c.rect.left - curX;
       if (direction === "right" && dx <= colThreshold) continue;
       if (direction === "left" && dx >= -colThreshold) continue;
       const colDist = Math.abs(dx);
-      const rowDist = Math.abs(r.top - curRect.top);
+      const rowDist = Math.abs(c.rect.top + c.rect.height / 2 - curCenterY);
       if (colDist < bestColDist - colThreshold || Math.abs(colDist - bestColDist) <= colThreshold && rowDist < bestRowDist) {
         bestColDist = colDist;
         bestRowDist = rowDist;
-        bestIdx = idx;
+        best = { cardIdx: c.cardIdx, itemKey: c.itemKey };
       }
     }
-    if (bestIdx !== -1) return bestIdx;
-    let wrapIdx = -1;
+    if (best) return best;
+    let wrapBest = null;
     let extremeX = direction === "right" ? Infinity : -Infinity;
     let wrapRowDist = Infinity;
-    for (const el of cardEls) {
-      const idx = Number(el.dataset.cardIndex);
-      const r = el.getBoundingClientRect();
-      const isMoreExtreme = direction === "right" ? r.left < extremeX - colThreshold : r.left > extremeX + colThreshold;
-      const isSameExtreme = Math.abs(r.left - extremeX) <= colThreshold;
-      const rowDist = Math.abs(r.top - curRect.top);
+    for (const c of candidates) {
+      const isMoreExtreme = direction === "right" ? c.rect.left < extremeX - colThreshold : c.rect.left > extremeX + colThreshold;
+      const isSameExtreme = Math.abs(c.rect.left - extremeX) <= colThreshold;
+      const rowDist = Math.abs(c.rect.top + c.rect.height / 2 - curCenterY);
       if (isMoreExtreme || isSameExtreme && rowDist < wrapRowDist) {
-        extremeX = r.left;
+        extremeX = c.rect.left;
         wrapRowDist = rowDist;
-        wrapIdx = idx;
+        wrapBest = { cardIdx: c.cardIdx, itemKey: c.itemKey };
       }
     }
-    return wrapIdx;
+    return wrapBest;
+  }
+  findFlowHorizontalCarryTarget(direction, anchorX, anchorY, excludeFolderPath) {
+    const colThreshold = 40;
+    const nodes = Array.from(
+      this.gridEl.querySelectorAll(".fb-row, .fb-card-header, .fb-empty-card")
+    );
+    const candidates = [];
+    for (const el of nodes) {
+      const cardEl = el.closest(".fb-card");
+      if (!cardEl) continue;
+      const cardIdx = Number(cardEl.dataset.cardIndex);
+      const card = this.renderedCards[cardIdx];
+      if (!card) continue;
+      const folderPath = normalizeFolderStr(card.folderPath);
+      if (this.isInvalidDropDest(folderPath, this.carryPaths)) continue;
+      if (excludeFolderPath !== null && folderPath === excludeFolderPath) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      candidates.push({ cardIdx, folderPath, rect });
+    }
+    let best = null;
+    let bestColDist = Infinity;
+    let bestRowDist = Infinity;
+    for (const c of candidates) {
+      const dx = c.rect.left - anchorX;
+      if (direction === "right" && dx <= colThreshold) continue;
+      if (direction === "left" && dx >= -colThreshold) continue;
+      const colDist = Math.abs(dx);
+      const rowDist = Math.abs(c.rect.top + c.rect.height / 2 - anchorY);
+      if (colDist < bestColDist - colThreshold || Math.abs(colDist - bestColDist) <= colThreshold && rowDist < bestRowDist) {
+        bestColDist = colDist;
+        bestRowDist = rowDist;
+        best = c;
+      }
+    }
+    if (best) return best;
+    let wrapBest = null;
+    let extremeX = direction === "right" ? Infinity : -Infinity;
+    let wrapRowDist = Infinity;
+    for (const c of candidates) {
+      const isMoreExtreme = direction === "right" ? c.rect.left < extremeX - colThreshold : c.rect.left > extremeX + colThreshold;
+      const isSameExtreme = Math.abs(c.rect.left - extremeX) <= colThreshold;
+      const rowDist = Math.abs(c.rect.top + c.rect.height / 2 - anchorY);
+      if (isMoreExtreme || isSameExtreme && rowDist < wrapRowDist) {
+        extremeX = c.rect.left;
+        wrapRowDist = rowDist;
+        wrapBest = c;
+      }
+    }
+    return wrapBest;
   }
   focusCardHeader(cardIdx) {
     this.focusedCardIndex = cardIdx;
@@ -2598,14 +3018,30 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       e.preventDefault();
       e.stopPropagation();
       const dir = e.key === "ArrowRight" ? "right" : "left";
-      let nextIdx;
       if (this.plugin.settings.gridCols === "flow") {
-        const spatial = this.findHorizontalNeighborCard(this.focusedCardIndex, dir);
-        nextIdx = spatial >= 0 ? spatial : (this.focusedCardIndex + (dir === "right" ? 1 : -1) + this.renderedCards.length) % this.renderedCards.length;
-      } else {
-        const delta = dir === "right" ? 1 : -1;
-        nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
+        const spatial = this.findFlowHorizontalNavTarget(dir);
+        if (spatial) {
+          const targetCard2 = this.renderedCards[spatial.cardIdx];
+          if (targetCard2) {
+            if (spatial.itemKey === CARD_HEADER_KEY) {
+              if (!targetCard2.isRootCard) {
+                this.focusCardHeader(spatial.cardIdx);
+              } else {
+                this.focusCardItem(spatial.cardIdx, 0, { clearSelection: true, updatePreview: true });
+              }
+              return;
+            }
+            const itemIdx = targetCard2.items.findIndex((it) => it.key === spatial.itemKey);
+            this.focusCardItem(spatial.cardIdx, itemIdx >= 0 ? itemIdx : 0, {
+              clearSelection: true,
+              updatePreview: true
+            });
+            return;
+          }
+        }
       }
+      const delta = dir === "right" ? 1 : -1;
+      const nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
       const targetCard = this.renderedCards[nextIdx];
       const firstFileIdx = targetCard.items.findIndex((it) => it.type === "file");
       this.focusCardItem(nextIdx, firstFileIdx >= 0 ? firstFileIdx : 0, {
@@ -2810,9 +3246,7 @@ var FolderBoardSettingTab = class extends import_obsidian4.PluginSettingTab {
     );
     new import_obsidian4.Setting(containerEl).setName("\uAE30\uC5B5\uB41C \uD3F4\uB354 \uD3BC\uCE68 \uC0C1\uD0DC \uCD08\uAE30\uD654").addButton(
       (btn) => btn.setButtonText("\uCD08\uAE30\uD654").onClick(async () => {
-        this.plugin.settings.expandedFolders = [];
-        this.plugin.settings.collapsedFlowSections = [];
-        await this.plugin.saveSettings();
+        await this.plugin.resetAllExpandedStates();
         this.plugin.refreshOpenViews();
       })
     );
@@ -2827,7 +3261,10 @@ var DEFAULT_SETTINGS = {
   verticalEdgeBehavior: "adaptive",
   expandedFolders: [],
   folderOrder: {},
-  collapsedFlowSections: []
+  collapsedFlowSections: [],
+  expandedFlowWindows: [],
+  flowColumnWidth: 270,
+  quickLookSplitRatio: 0.4
 };
 
 // src/main.ts
@@ -2837,6 +3274,7 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.expandedSet = /* @__PURE__ */ new Set();
     this.collapsedFlowSet = /* @__PURE__ */ new Set();
+    this.expandedFlowWinSet = /* @__PURE__ */ new Set();
   }
   async onload() {
     await this.loadSettings();
@@ -2898,12 +3336,20 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     if (!this.settings.folderOrder || typeof this.settings.folderOrder !== "object") {
       this.settings.folderOrder = {};
     }
+    if (typeof this.settings.flowColumnWidth !== "number" || !Number.isFinite(this.settings.flowColumnWidth)) {
+      this.settings.flowColumnWidth = DEFAULT_SETTINGS.flowColumnWidth;
+    }
+    if (typeof this.settings.quickLookSplitRatio !== "number" || !Number.isFinite(this.settings.quickLookSplitRatio)) {
+      this.settings.quickLookSplitRatio = DEFAULT_SETTINGS.quickLookSplitRatio;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
+    this.expandedFlowWinSet = new Set(this.settings.expandedFlowWindows || []);
   }
   async saveSettings() {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
+    this.settings.expandedFlowWindows = [...this.expandedFlowWinSet];
     await this.saveData(this.settings);
   }
   isFolderExpanded(path) {
@@ -2946,6 +3392,23 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     }
     await this.saveSettings();
   }
+  // [ID 6.6.8] 여러줄 모드(flow) 대용량 폴더 1열 확장 토글 영속 관리
+  isFlowWindowExpanded(key) {
+    return this.expandedFlowWinSet.has(key);
+  }
+  async toggleFlowWindowExpanded(key) {
+    const next = !this.expandedFlowWinSet.has(key);
+    if (next) this.expandedFlowWinSet.add(key);
+    else this.expandedFlowWinSet.delete(key);
+    await this.saveSettings();
+    return next;
+  }
+  async resetAllExpandedStates() {
+    this.expandedSet.clear();
+    this.collapsedFlowSet.clear();
+    this.expandedFlowWinSet.clear();
+    await this.saveSettings();
+  }
   async renameExpandedFolder(oldPath, newPath) {
     let changed = false;
     if (this.expandedSet.has(oldPath)) {
@@ -2956,6 +3419,11 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     if (this.collapsedFlowSet.has(oldPath)) {
       this.collapsedFlowSet.delete(oldPath);
       this.collapsedFlowSet.add(newPath);
+      changed = true;
+    }
+    if (this.expandedFlowWinSet.has(oldPath)) {
+      this.expandedFlowWinSet.delete(oldPath);
+      this.expandedFlowWinSet.add(newPath);
       changed = true;
     }
     const nextOrder = {};
