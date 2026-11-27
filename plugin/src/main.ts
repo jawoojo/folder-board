@@ -3,13 +3,12 @@
 import { Plugin, WorkspaceLeaf } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
-import { DEFAULT_SETTINGS, type FolderBoardSettings } from "./types";
+import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings } from "./types";
 
 export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
   private expandedSet = new Set<string>();
   private collapsedFlowSet = new Set<string>();
-  private expandedFlowWinSet = new Set<string>();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -92,15 +91,25 @@ export default class FolderBoardPlugin extends Plugin {
     ) {
       this.settings.quickLookSplitRatio = DEFAULT_SETTINGS.quickLookSplitRatio;
     }
+    if (!this.settings.flowWindowSizes || typeof this.settings.flowWindowSizes !== "object") {
+      this.settings.flowWindowSizes = {};
+    }
+    // 구버전 expandedFlowWindows 설정을 소/중/대 규격("lg")으로 자동 마이그레이션
+    if (Array.isArray(this.settings.expandedFlowWindows) && this.settings.expandedFlowWindows.length > 0) {
+      for (const k of this.settings.expandedFlowWindows) {
+        if (!(k in this.settings.flowWindowSizes)) {
+          this.settings.flowWindowSizes[k] = "lg";
+        }
+      }
+      delete this.settings.expandedFlowWindows;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
-    this.expandedFlowWinSet = new Set(this.settings.expandedFlowWindows || []);
   }
 
   async saveSettings(): Promise<void> {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
-    this.settings.expandedFlowWindows = [...this.expandedFlowWinSet];
     await this.saveData(this.settings);
   }
 
@@ -151,23 +160,28 @@ export default class FolderBoardPlugin extends Plugin {
     await this.saveSettings();
   }
 
-  // [ID 6.6.8] 여러줄 모드(flow) 대용량 폴더 1열 확장 토글 영속 관리
-  isFlowWindowExpanded(key: string): boolean {
-    return this.expandedFlowWinSet.has(key);
+  // [ID 6.6.8] 여러줄 모드(flow) 폴더별 표시 길이(소·중·대 또는 드래그 지정 행 수) 영속 관리
+  getFlowWindowSizeSpec(key: string): FlowWindowSizeSpec {
+    return this.settings.flowWindowSizes[key] ?? "md";
   }
 
-  async toggleFlowWindowExpanded(key: string): Promise<boolean> {
-    const next = !this.expandedFlowWinSet.has(key);
-    if (next) this.expandedFlowWinSet.add(key);
-    else this.expandedFlowWinSet.delete(key);
+  async setFlowWindowSizeSpec(key: string, spec: FlowWindowSizeSpec): Promise<void> {
+    if (spec === "md") {
+      delete this.settings.flowWindowSizes[key];
+    } else {
+      this.settings.flowWindowSizes[key] = spec;
+    }
     await this.saveSettings();
-    return next;
+  }
+
+  hasAnyDynamicFlowWindow(): boolean {
+    return Object.values(this.settings.flowWindowSizes).some((v) => v === "lg" || typeof v === "number");
   }
 
   async resetAllExpandedStates(): Promise<void> {
     this.expandedSet.clear();
     this.collapsedFlowSet.clear();
-    this.expandedFlowWinSet.clear();
+    this.settings.flowWindowSizes = {};
     await this.saveSettings();
   }
 
@@ -183,9 +197,9 @@ export default class FolderBoardPlugin extends Plugin {
       this.collapsedFlowSet.add(newPath);
       changed = true;
     }
-    if (this.expandedFlowWinSet.has(oldPath)) {
-      this.expandedFlowWinSet.delete(oldPath);
-      this.expandedFlowWinSet.add(newPath);
+    if (oldPath in this.settings.flowWindowSizes) {
+      this.settings.flowWindowSizes[newPath] = this.settings.flowWindowSizes[oldPath];
+      delete this.settings.flowWindowSizes[oldPath];
       changed = true;
     }
 

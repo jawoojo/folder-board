@@ -416,11 +416,11 @@
   text-align: left;
 }
 
-/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 확장/줄이기 버튼 (절대 위치로 레이아웃 튐 0) */
+/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 소·중·대 선택바 + 상하 드래그 리사이즈 (레이아웃 튐 0) */
 .fb-flow-scroll-footer {
   position: relative;
   padding: 6px 6px 4px 19px;
-  cursor: pointer;
+  cursor: ns-resize;
   break-before: avoid;
   -webkit-column-break-before: avoid;
 }
@@ -433,7 +433,14 @@
   border-radius: 99px;
   background-color: color-mix(in srgb, var(--text-normal) 10%, transparent);
   overflow: hidden;
-  transition: opacity 120ms ease;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+.fb-flow-scroll-footer.is-unscrolled .fb-flow-scroll-track {
+  opacity: 0;
+}
+.fb-flow-scroll-footer.is-unscrolled:hover .fb-flow-scroll-track,
+.fb-flow-scroll-footer.is-resizing .fb-flow-scroll-track {
+  opacity: 0.45;
 }
 .fb-flow-scroll-thumb {
   position: absolute;
@@ -443,50 +450,87 @@
   background-color: color-mix(in srgb, var(--text-normal) 38%, transparent);
   transition: left 60ms linear, width 60ms linear;
 }
-.fb-flow-expand-btn {
+.fb-flow-scroll-footer.is-resizing .fb-flow-scroll-thumb {
+  background-color: var(--interactive-accent);
+}
+
+.fb-flow-size-bar {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%) scale(0.95);
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  height: 18px !important;
-  padding: 0 8px !important;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 99px;
+  border: 1px solid var(--background-modifier-border-hover);
+  background-color: var(--background-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 130ms ease, transform 130ms ease;
+  z-index: 5;
+}
+.fb-flow-size-btn {
+  height: 16px !important;
+  min-width: 22px !important;
+  padding: 0 6px !important;
+  border: none !important;
   border-radius: 99px !important;
-  border: 1px solid var(--background-modifier-border-hover) !important;
-  background-color: var(--background-primary) !important;
+  background: transparent !important;
+  box-shadow: none !important;
   color: var(--text-muted) !important;
   font-size: 10.5px !important;
   font-weight: 500 !important;
   line-height: 1 !important;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14) !important;
-  opacity: 0;
-  pointer-events: none;
   cursor: pointer;
-  transition: opacity 130ms ease, transform 130ms ease, color 120ms ease, border-color 120ms ease;
-  z-index: 4;
+  transition: background-color 100ms ease, color 100ms ease;
 }
-.fb-flow-expand-icon {
-  display: inline-flex;
-  align-items: center;
+.fb-flow-size-btn:hover {
+  background-color: var(--background-modifier-hover) !important;
+  color: var(--text-normal) !important;
 }
-.fb-flow-expand-icon svg {
-  width: 11px;
-  height: 11px;
+.fb-flow-size-btn.is-active {
+  background-color: color-mix(in srgb, var(--text-normal) 14%, transparent) !important;
+  color: var(--text-normal) !important;
+  font-weight: 600 !important;
 }
-.fb-flow-scroll-footer:hover .fb-flow-scroll-track {
+
+.fb-flow-scroll-footer:hover:not(.is-resizing) .fb-flow-scroll-track {
   opacity: 0.25;
 }
-.fb-flow-scroll-footer:hover .fb-flow-expand-btn,
-.fb-flow-expand-btn:focus-visible {
+.fb-flow-scroll-footer:hover:not(.is-resizing) .fb-flow-size-bar,
+.fb-flow-size-bar:focus-within {
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, -50%) scale(1);
 }
-.fb-flow-expand-btn:hover {
-  color: var(--text-normal) !important;
-  border-color: color-mix(in srgb, var(--text-normal) 40%, transparent) !important;
+
+.fb-flow-drag-badge {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent, #fff);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  z-index: 6;
+}
+.fb-flow-scroll-footer.is-resizing .fb-flow-drag-badge {
+  display: inline-block;
+}
+.fb-flow-scroll-footer.is-resizing .fb-flow-size-bar {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 /* ==========================================================================

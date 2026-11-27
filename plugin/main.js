@@ -181,6 +181,7 @@ var VIEW_TYPE_FOLDER_BOARD = "folder-board-view";
 var DRAG_MIME = "application/x-obsidian-folder-board";
 var CARD_REORDER_MIME = "application/x-obsidian-folder-board-card";
 var CARD_HEADER_KEY = "__card_header__";
+var FLOW_SIZE_SM = 4;
 var FLOW_WINDOW_SIZE = 15;
 var FLOW_COL_GAP = 24;
 var FLOW_CANVAS_PAD_LEFT = 14;
@@ -551,7 +552,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         this.applyGridLayoutClasses(this.renderedCards.length);
       } else if (this.plugin.settings.gridCols === "flow") {
         const nextH = this.canvasEl.clientHeight;
-        if (Math.abs(nextH - this.lastCanvasHeight) >= 16 && this.plugin.settings.expandedFlowWindows.length > 0) {
+        if (Math.abs(nextH - this.lastCanvasHeight) >= 12 && this.plugin.hasAnyDynamicFlowWindow()) {
           this.lastCanvasHeight = nextH;
           this.renderGridAndHeader();
           return;
@@ -1083,21 +1084,33 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   getFlowWindowKey(cardModel) {
     return cardModel.isRootCard ? "__root__" : cardModel.folderPath;
   }
-  // [ID 6.5.47] 여러줄 모드 카드 1열 최대 확장 길이 계산
-  // -> 스크롤바 호버 확장 버튼 클릭 시 현재 캔버스 세로 높이에 맞춰 최대 1열까지만 확장되도록 동적으로 행 수를 산출함.
-  getFlowMaxOneColumnItems(cardModel) {
-    const canvasH = this.canvasEl?.clientHeight || 680;
+  // [ID 6.5.47] 여러줄 모드 카드 1열 꽉 찬 최대 행 수 정밀 산출
+  // -> .fb-grid 실제 내부 높이와 실측 행 높이(flow 모드는 gap 0)를 그대로 사용해 화면 하단까지 빈틈없이 딱 맞게 채움.
+  measureFlowRowHeight() {
     const sampleRow = this.gridEl?.querySelector(".fb-row");
-    const measuredRowH = sampleRow ? sampleRow.getBoundingClientRect().height : 28;
-    const rowH = Math.max(24, Math.min(36, Math.round(measuredRowH) + 1));
-    const chromeH = cardModel.isRootCard ? 46 : 94;
-    const usableH = Math.max(rowH * (FLOW_WINDOW_SIZE + 2), canvasH - chromeH);
-    return Math.max(FLOW_WINDOW_SIZE + 2, Math.floor(usableH / rowH));
+    const measured = sampleRow ? sampleRow.getBoundingClientRect().height : 27;
+    return Math.max(22, Math.min(40, measured || 27));
+  }
+  getFlowMaxOneColumnItems(cardModel) {
+    const gridH = this.gridEl?.clientHeight || Math.max(240, (this.canvasEl?.clientHeight || 720) - 24);
+    const rowH = this.measureFlowRowHeight();
+    const sampleHeader = !cardModel.isRootCard ? this.gridEl?.querySelector(".fb-card-header") : null;
+    const headerH = sampleHeader ? sampleHeader.getBoundingClientRect().height : 28;
+    const chromeH = cardModel.isRootCard ? 16 : Math.ceil(headerH) + 28;
+    const usableH = Math.max(rowH * FLOW_SIZE_SM, gridH - chromeH);
+    return Math.max(FLOW_SIZE_SM, Math.floor(usableH / rowH));
   }
   getFlowWindowLimit(cardModel) {
     const key = this.getFlowWindowKey(cardModel);
-    if (!this.plugin.isFlowWindowExpanded(key)) return FLOW_WINDOW_SIZE;
-    return Math.min(cardModel.items.length, this.getFlowMaxOneColumnItems(cardModel));
+    const spec = this.plugin.getFlowWindowSizeSpec(key);
+    const maxOneCol = this.getFlowMaxOneColumnItems(cardModel);
+    if (spec === "sm") return Math.min(cardModel.items.length, FLOW_SIZE_SM);
+    if (spec === "lg") return Math.min(cardModel.items.length, maxOneCol);
+    if (typeof spec === "number" && Number.isFinite(spec)) {
+      const clamped = Math.max(2, Math.min(Math.round(spec), maxOneCol));
+      return Math.min(cardModel.items.length, clamped);
+    }
+    return Math.min(cardModel.items.length, FLOW_WINDOW_SIZE);
   }
   getFlowWindowOffset(cardModel) {
     const limit = this.getFlowWindowLimit(cardModel);
@@ -1118,28 +1131,44 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
   }
   updateFlowWindowDOM(cardIdx) {
     const cardModel = this.renderedCards[cardIdx];
-    if (!cardModel || this.plugin.settings.gridCols !== "flow") return;
+    if (!cardModel || this.plugin.settings.gridCols !== "flow" || cardModel.isCollapsedSection) return;
     const limit = this.getFlowWindowLimit(cardModel);
-    if (cardModel.isCollapsedSection || cardModel.items.length <= limit) return;
+    const isScrollable = cardModel.items.length > limit;
     const cardEl = this.gridEl.querySelector(`.fb-card[data-card-index="${cardIdx}"]`);
     if (!cardEl) return;
     const listEl = cardEl.querySelector(".fb-card-body");
     if (!listEl) return;
-    const offset = this.getFlowWindowOffset(cardModel);
+    if (isScrollable) cardEl.setAttribute("data-windowed", "true");
+    else cardEl.removeAttribute("data-windowed");
+    const offset = isScrollable ? this.getFlowWindowOffset(cardModel) : 0;
     const isCarrying = this.carryPaths.length > 0;
     listEl.empty();
-    this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, offset, offset + limit);
+    this.renderCardRows(
+      listEl,
+      cardModel,
+      cardIdx,
+      isCarrying,
+      offset,
+      isScrollable ? offset + limit : cardModel.items.length
+    );
     const countEl = cardEl.querySelector(".fb-count");
     if (countEl) {
-      countEl.setText(this.formatFlowCountLabel(cardModel, true));
+      countEl.setText(this.formatFlowCountLabel(cardModel, isScrollable));
     }
+    const footerEl = cardEl.querySelector(".fb-flow-scroll-footer");
+    footerEl?.toggleClass("is-unscrolled", !isScrollable);
     const thumbEl = cardEl.querySelector(".fb-flow-scroll-thumb");
     if (thumbEl) {
       const total = cardModel.items.length;
-      const pctLeft = offset / total * 100;
-      const pctWidth = Math.max(8, limit / total * 100);
-      thumbEl.style.left = `${pctLeft}%`;
-      thumbEl.style.width = `${pctWidth}%`;
+      if (isScrollable) {
+        const pctLeft = offset / total * 100;
+        const pctWidth = Math.max(8, limit / total * 100);
+        thumbEl.style.left = `${pctLeft}%`;
+        thumbEl.style.width = `${pctWidth}%`;
+      } else {
+        thumbEl.style.left = "0%";
+        thumbEl.style.width = "100%";
+      }
     }
   }
   ensureFlowWindowIncludes(cardIdx, itemIndex) {
@@ -1167,10 +1196,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const isFocusedCard = !isCarrying && cardIdx === this.focusedCardIndex;
     const isCarryCard = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === cardModel.folderPath;
     const winKey = this.getFlowWindowKey(cardModel);
-    const isLargeFlowCard = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_WINDOW_SIZE;
-    const windowLimit = isLargeFlowCard ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
-    const isScrollableWindow = isLargeFlowCard && cardModel.items.length > windowLimit;
-    const isExpandedWindow = isLargeFlowCard && this.plugin.isFlowWindowExpanded(winKey);
+    const isResizableFlowCard = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_SIZE_SM;
+    const windowLimit = isResizableFlowCard ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
+    const isScrollableWindow = isResizableFlowCard && cardModel.items.length > windowLimit;
+    const activeSizeSpec = isResizableFlowCard ? this.plugin.getFlowWindowSizeSpec(winKey) : "md";
     const cardEl = parentEl.createDiv({
       cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
       attr: {
@@ -1179,11 +1208,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         ...isScrollableWindow ? { "data-windowed": "true" } : {}
       }
     });
-    if (isScrollableWindow) {
+    if (isResizableFlowCard) {
       cardEl.addEventListener(
         "wheel",
         (e) => {
           if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+          const curLimit = this.getFlowWindowLimit(cardModel);
+          if (cardModel.items.length <= curLimit) return;
           e.preventDefault();
           e.stopPropagation();
           const accum = (this.flowWheelAccum.get(winKey) || 0) + e.deltaY;
@@ -1194,7 +1225,6 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
             return;
           }
           this.flowWheelAccum.set(winKey, accum - rowSteps * stepPx);
-          const curLimit = this.getFlowWindowLimit(cardModel);
           const curOffset = this.getFlowWindowOffset(cardModel);
           const maxOffset = Math.max(0, cardModel.items.length - curLimit);
           const nextOffset = Math.max(0, Math.min(curOffset + rowSteps, maxOffset));
@@ -1297,9 +1327,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const startIdx = isScrollableWindow ? this.getFlowWindowOffset(cardModel) : 0;
     const endIdx = isScrollableWindow ? Math.min(cardModel.items.length, startIdx + windowLimit) : cardModel.items.length;
     this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx);
-    if (isLargeFlowCard) {
+    if (isResizableFlowCard) {
       const footer = cardEl.createDiv({
-        cls: "fb-flow-scroll-footer" + (isExpandedWindow ? " is-expanded" : "")
+        cls: "fb-flow-scroll-footer" + (isScrollableWindow ? "" : " is-unscrolled"),
+        attr: { "aria-label": "\uB4DC\uB798\uADF8\uB85C \uAE38\uC774 \uC870\uC808 \uB610\uB294 \uC18C/\uC911/\uB300 \uC120\uD0DD" }
       });
       const track = footer.createDiv({ cls: "fb-flow-scroll-track" });
       const thumb = track.createDiv({ cls: "fb-flow-scroll-thumb" });
@@ -1311,24 +1342,90 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         thumb.style.left = "0%";
         thumb.style.width = "100%";
       }
-      const expandBtn = footer.createEl("button", {
-        cls: "fb-flow-expand-btn",
-        attr: {
-          type: "button",
-          "aria-label": isExpandedWindow ? "\uAE30\uBCF8 \uAE38\uC774(15\uAC1C)\uB85C \uC904\uC774\uAE30" : "\uCD5C\uB300 1\uC5F4 \uAE38\uC774\uB85C \uD3BC\uCE58\uAE30"
-        }
-      });
-      const btnIcon = expandBtn.createSpan({ cls: "fb-flow-expand-icon" });
-      (0, import_obsidian3.setIcon)(btnIcon, isExpandedWindow ? "chevrons-up" : "chevrons-down");
-      expandBtn.createSpan({ text: isExpandedWindow ? "\uC904\uC774\uAE30" : "\uD3BC\uCE58\uAE30" });
-      const toggleExpand = async (e) => {
+      const sizeBar = footer.createDiv({ cls: "fb-flow-size-bar" });
+      const sizePresets = [
+        { spec: "sm", label: "\uC18C", aria: `\uC18C (${FLOW_SIZE_SM}\uAC1C)` },
+        { spec: "md", label: "\uC911", aria: `\uC911 (\uAE30\uBCF8 ${FLOW_WINDOW_SIZE}\uAC1C)` }
+      ];
+      if (cardModel.items.length > FLOW_WINDOW_SIZE) {
+        sizePresets.push({ spec: "lg", label: "\uB300", aria: "\uB300 (1\uC5F4 \uAF49\uCC28\uAC8C)" });
+      }
+      let suppressNextClick = false;
+      for (const preset of sizePresets) {
+        const isActive = activeSizeSpec === preset.spec || typeof activeSizeSpec === "number" && (preset.spec === "sm" && activeSizeSpec === FLOW_SIZE_SM || preset.spec === "md" && activeSizeSpec === FLOW_WINDOW_SIZE);
+        const btn = sizeBar.createEl("button", {
+          cls: "fb-flow-size-btn" + (isActive ? " is-active" : ""),
+          text: preset.label,
+          attr: { type: "button", "aria-label": preset.aria }
+        });
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+          }
+          await this.plugin.setFlowWindowSizeSpec(winKey, preset.spec);
+          this.renderGridAndHeader();
+          this.scrollFocusedIntoView();
+        });
+      }
+      const dragBadge = footer.createSpan({ cls: "fb-flow-drag-badge" });
+      footer.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
         e.stopPropagation();
-        await this.plugin.toggleFlowWindowExpanded(winKey);
-        this.renderGridAndHeader();
-        this.scrollFocusedIntoView();
-      };
-      expandBtn.addEventListener("click", (e) => void toggleExpand(e));
-      footer.addEventListener("click", (e) => void toggleExpand(e));
+        const startY = e.clientY;
+        const startRows = Math.min(cardModel.items.length, this.getFlowWindowLimit(cardModel));
+        const rowH = this.measureFlowRowHeight();
+        const maxOneCol = this.getFlowMaxOneColumnItems(cardModel);
+        const maxRows = Math.min(cardModel.items.length, maxOneCol);
+        const minRows = Math.min(2, cardModel.items.length);
+        let isDragging = false;
+        let latestRows = startRows;
+        const onMove = (ev) => {
+          const dy = ev.clientY - startY;
+          if (!isDragging && Math.abs(dy) >= 4) {
+            isDragging = true;
+            footer.addClass("is-resizing");
+            document.body.style.cursor = "ns-resize";
+          }
+          if (!isDragging) return;
+          const nextRows = Math.max(minRows, Math.min(maxRows, startRows + Math.round(dy / rowH)));
+          dragBadge.setText(
+            nextRows >= maxOneCol && cardModel.items.length > maxOneCol ? `${nextRows}\uAC1C \xB7 \uCD5C\uB300` : `${nextRows}\uAC1C`
+          );
+          if (nextRows !== latestRows) {
+            latestRows = nextRows;
+            this.plugin.settings.flowWindowSizes[winKey] = nextRows;
+            this.updateFlowWindowDOM(cardIdx);
+          }
+        };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          if (!isDragging) return;
+          suppressNextClick = true;
+          window.setTimeout(() => {
+            suppressNextClick = false;
+          }, 0);
+          footer.removeClass("is-resizing");
+          document.body.style.cursor = "";
+          let finalSpec = latestRows;
+          if (latestRows === FLOW_SIZE_SM) {
+            finalSpec = "sm";
+          } else if (latestRows === FLOW_WINDOW_SIZE || latestRows === cardModel.items.length && cardModel.items.length <= FLOW_WINDOW_SIZE) {
+            finalSpec = "md";
+          } else if (latestRows >= maxOneCol && cardModel.items.length > FLOW_WINDOW_SIZE) {
+            finalSpec = "lg";
+          }
+          void this.plugin.setFlowWindowSizeSpec(winKey, finalSpec).then(() => {
+            this.renderGridAndHeader();
+          });
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+      });
     }
   }
   renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx) {
@@ -3262,7 +3359,7 @@ var DEFAULT_SETTINGS = {
   expandedFolders: [],
   folderOrder: {},
   collapsedFlowSections: [],
-  expandedFlowWindows: [],
+  flowWindowSizes: {},
   flowColumnWidth: 270,
   quickLookSplitRatio: 0.4
 };
@@ -3274,7 +3371,6 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.expandedSet = /* @__PURE__ */ new Set();
     this.collapsedFlowSet = /* @__PURE__ */ new Set();
-    this.expandedFlowWinSet = /* @__PURE__ */ new Set();
   }
   async onload() {
     await this.loadSettings();
@@ -3342,14 +3438,23 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     if (typeof this.settings.quickLookSplitRatio !== "number" || !Number.isFinite(this.settings.quickLookSplitRatio)) {
       this.settings.quickLookSplitRatio = DEFAULT_SETTINGS.quickLookSplitRatio;
     }
+    if (!this.settings.flowWindowSizes || typeof this.settings.flowWindowSizes !== "object") {
+      this.settings.flowWindowSizes = {};
+    }
+    if (Array.isArray(this.settings.expandedFlowWindows) && this.settings.expandedFlowWindows.length > 0) {
+      for (const k of this.settings.expandedFlowWindows) {
+        if (!(k in this.settings.flowWindowSizes)) {
+          this.settings.flowWindowSizes[k] = "lg";
+        }
+      }
+      delete this.settings.expandedFlowWindows;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
-    this.expandedFlowWinSet = new Set(this.settings.expandedFlowWindows || []);
   }
   async saveSettings() {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
-    this.settings.expandedFlowWindows = [...this.expandedFlowWinSet];
     await this.saveData(this.settings);
   }
   isFolderExpanded(path) {
@@ -3392,21 +3497,25 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
     }
     await this.saveSettings();
   }
-  // [ID 6.6.8] 여러줄 모드(flow) 대용량 폴더 1열 확장 토글 영속 관리
-  isFlowWindowExpanded(key) {
-    return this.expandedFlowWinSet.has(key);
+  // [ID 6.6.8] 여러줄 모드(flow) 폴더별 표시 길이(소·중·대 또는 드래그 지정 행 수) 영속 관리
+  getFlowWindowSizeSpec(key) {
+    return this.settings.flowWindowSizes[key] ?? "md";
   }
-  async toggleFlowWindowExpanded(key) {
-    const next = !this.expandedFlowWinSet.has(key);
-    if (next) this.expandedFlowWinSet.add(key);
-    else this.expandedFlowWinSet.delete(key);
+  async setFlowWindowSizeSpec(key, spec) {
+    if (spec === "md") {
+      delete this.settings.flowWindowSizes[key];
+    } else {
+      this.settings.flowWindowSizes[key] = spec;
+    }
     await this.saveSettings();
-    return next;
+  }
+  hasAnyDynamicFlowWindow() {
+    return Object.values(this.settings.flowWindowSizes).some((v) => v === "lg" || typeof v === "number");
   }
   async resetAllExpandedStates() {
     this.expandedSet.clear();
     this.collapsedFlowSet.clear();
-    this.expandedFlowWinSet.clear();
+    this.settings.flowWindowSizes = {};
     await this.saveSettings();
   }
   async renameExpandedFolder(oldPath, newPath) {
@@ -3421,9 +3530,9 @@ var FolderBoardPlugin = class extends import_obsidian5.Plugin {
       this.collapsedFlowSet.add(newPath);
       changed = true;
     }
-    if (this.expandedFlowWinSet.has(oldPath)) {
-      this.expandedFlowWinSet.delete(oldPath);
-      this.expandedFlowWinSet.add(newPath);
+    if (oldPath in this.settings.flowWindowSizes) {
+      this.settings.flowWindowSizes[newPath] = this.settings.flowWindowSizes[oldPath];
+      delete this.settings.flowWindowSizes[oldPath];
       changed = true;
     }
     const nextOrder = {};
