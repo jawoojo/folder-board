@@ -2,6 +2,7 @@
 // -> 레이아웃(2/3/4열 · 세로 · 가로 · 여러줄), 정렬, 열기 방식, 경계 이동 정책, 영속 상태 초기화를 관리함.
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type FolderBoardPlugin from "./main";
+import { renderShortcutsGrid } from "./shortcuts";
 import type { LayoutColumns, OpenBehavior, SortMode, VerticalEdgeBehavior } from "./types";
 
 export class FolderBoardSettingTab extends PluginSettingTab {
@@ -20,12 +21,12 @@ export class FolderBoardSettingTab extends PluginSettingTab {
       .setName("기본 레이아웃")
       .addDropdown((dd) =>
         dd
+          .addOption("flow", "여러줄 모드 (섹션 분류 · 기본)")
           .addOption("2", "2열 그리드")
           .addOption("3", "3열 그리드")
           .addOption("4", "4열 그리드")
           .addOption("auto", "세로 모드 (넓이 자동 맞춤)")
           .addOption("scroll", "가로 모드 (세로 펼침 · 가로 스크롤)")
-          .addOption("flow", "여러줄 모드 (섹션 분류 · 빈공간 최소화)")
           .setValue(String(this.plugin.settings.gridCols))
           .onChange(async (value) => {
             this.plugin.settings.gridCols = (
@@ -95,5 +96,10 @@ export class FolderBoardSettingTab extends PluginSettingTab {
           this.plugin.refreshOpenViews();
         })
       );
+
+    // [ID 6.4.1] 설정 탭 하단 단축키 치트시트
+    new Setting(containerEl).setName("단축키 안내").setHeading();
+    const shortcutWrap = containerEl.createDiv({ cls: "fb-settings-shortcuts" });
+    renderShortcutsGrid(shortcutWrap);
   }
 }

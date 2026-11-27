@@ -335,9 +335,94 @@
 }
 
 .fb-layout-flow .fb-card.is-root-card {
+  position: relative;
   background-color: transparent;
   border: 1px solid transparent;
   padding: 3px 5px 5px;
+}
+.fb-layout-flow .fb-card.is-root-card.is-root-moved:hover {
+  background-color: color-mix(in srgb, var(--background-secondary) 52%, transparent);
+  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 65%, transparent);
+}
+.fb-layout-flow .fb-card.is-root-card.is-root-moved.is-focused-card {
+  background-color: color-mix(in srgb, var(--background-secondary) 68%, transparent);
+  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 90%, transparent);
+}
+
+/* [ID 6.7.16] 직속 카드 C안 하이브리드: 여러줄 모드 맨 앞(0번) 상단 여백 전용 호버 드래그 손잡이 + 이동 시 은은한 미니 헤더 */
+.fb-layout-flow .fb-card.is-root-card {
+  position: relative;
+  overflow: visible;
+}
+.fb-root-hover-zone {
+  position: absolute;
+  top: -12px;
+  left: 0;
+  right: 0;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+}
+.fb-root-hover-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  padding: 0 7px;
+  border-radius: 99px;
+  border: 1px solid var(--background-modifier-border-hover);
+  background-color: var(--background-primary);
+  color: var(--text-faint);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.94);
+  transition: opacity 130ms ease, transform 130ms ease, color 110ms ease;
+}
+.fb-root-hover-grip svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-root-hover-zone:hover > .fb-root-hover-grip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+.fb-root-hover-grip:hover {
+  color: var(--text-normal);
+}
+.fb-root-hover-grip:active {
+  cursor: grabbing;
+}
+
+.fb-card-header.is-root-moved-header {
+  cursor: grab;
+  border-bottom-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 55%, transparent);
+}
+.fb-card-header.is-root-moved-header:active {
+  cursor: grabbing;
+}
+.fb-root-header-grip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  opacity: 0.55;
+  flex-shrink: 0;
+  transition: opacity 110ms ease;
+}
+.fb-root-header-grip svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-card-header.is-root-moved-header:hover .fb-root-header-grip {
+  opacity: 1;
+}
+.fb-card-title.is-root-moved-title {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .fb-layout-flow .fb-card.is-drag-over,
@@ -578,28 +663,6 @@
   flex-direction: column;
   overflow: hidden;
   transition: border-color 120ms ease, background-color 120ms ease;
-}
-
-/* [ID 6.7.8] 직속 노트 영역 차별화 (보더·구분선 없는 순수 오픈 컬럼) */
-/* -> 폴더 박스(사각형 카드)와 시각적 위계를 명확히 분리해 현재 평면에 바로 놓인 직속 노트임을 직관적으로 표현함 */
-.fb-card.is-root-card {
-  background-color: transparent;
-  border: none;
-  border-radius: 0;
-  padding-right: 4px;
-}
-.fb-card.is-root-card:hover,
-.fb-card.is-root-card.is-focused-card {
-  border-color: transparent;
-}
-.fb-card.is-root-card .fb-card-body.nav-files-container {
-  padding: 0 4px 6px 0;
-}
-.fb-card.is-root-card.is-drag-over,
-.fb-card.is-root-card.is-carry-target {
-  background-color: var(--background-secondary);
-  border-radius: var(--radius-m, 8px);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-normal) 35%, transparent);
 }
 
 .fb-card:hover {
@@ -1078,4 +1141,98 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ==========================================================================
+   [ID 6.7.17] 단축키 치트시트 (? 모달 & 설정 탭 공용)
+   ========================================================================== */
+.modal.fb-shortcut-modal {
+  width: min(720px, 92vw);
+  max-height: 82vh;
+  padding: 18px 22px 20px;
+}
+.fb-shortcut-modal-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--divider-color, var(--background-modifier-border));
+}
+.fb-shortcut-modal-title {
+  font-size: var(--font-ui-medium, 15px);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+.fb-shortcut-modal-hint {
+  font-size: var(--font-ui-smaller, 11.5px);
+  color: var(--text-faint);
+}
+.fb-settings-shortcuts {
+  margin-top: 8px;
+}
+.fb-shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 14px;
+}
+.fb-shortcut-group {
+  background-color: var(--background-secondary);
+  border: 1px solid var(--divider-color, var(--background-modifier-border));
+  border-radius: var(--radius-m, 8px);
+  padding: 10px 12px;
+}
+.fb-shortcut-group-title {
+  font-size: var(--font-ui-smaller, 12px);
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 70%, transparent);
+}
+.fb-shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fb-shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--font-ui-smaller, 12px);
+  line-height: 1.35;
+}
+.fb-shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.fb-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-s, 4px);
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border-hover);
+  box-shadow: 0 1px 0 var(--background-modifier-border);
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+.fb-kbd-plus {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.fb-shortcut-desc {
+  color: var(--text-muted);
+  text-align: right;
+  min-width: 0;
 }

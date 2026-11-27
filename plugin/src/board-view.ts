@@ -15,6 +15,7 @@ import {
 } from "obsidian";
 import type FolderBoardPlugin from "./main";
 import { NamePromptModal } from "./name-modal";
+import { ShortcutHelpModal } from "./shortcuts";
 import {
   applyNativeDecoration,
   getFileByPath,
@@ -28,6 +29,7 @@ export const VIEW_TYPE_FOLDER_BOARD = "folder-board-view";
 const DRAG_MIME = "application/x-obsidian-folder-board";
 const CARD_REORDER_MIME = "application/x-obsidian-folder-board-card";
 const CARD_HEADER_KEY = "__card_header__";
+const ROOT_CARD_ORDER_KEY = "__root__";
 const FLOW_SIZE_SM = 4;
 const FLOW_WINDOW_SIZE = 15;
 const FLOW_MAX_DRAG_COLS = 4;
@@ -323,6 +325,20 @@ export class FolderBoardView extends ItemView {
     }
   }
 
+  private openShortcutHelpModal(): void {
+    this.isSubModalOpen = true;
+    this.syncScopeState();
+    const modal = new ShortcutHelpModal(this.app);
+    const origOnClose = modal.onClose.bind(modal);
+    modal.onClose = () => {
+      origOnClose();
+      this.isSubModalOpen = false;
+      this.syncScopeState();
+      requestAnimationFrame(() => this.shellEl?.focus());
+    };
+    modal.open();
+  }
+
   private focusSearchBox(): void {
     this.searchInputEl?.focus();
     this.searchInputEl?.select();
@@ -456,15 +472,15 @@ export class FolderBoardView extends ItemView {
       this.renderGridAndHeader();
     });
 
-    // [ID 6.5.12] 레이아웃 세그먼트 (2/3/4열 · 세로 · 가로 · 여러줄 섹션 분류)
+    // [ID 6.5.12] 레이아웃 세그먼트 (여러줄 모드를 기본 최좌측 배치 + 2/3/4열 · 세로 · 가로)
     const colGroup = controls.createDiv({ cls: "fb-segmented" });
     const layoutOptions: Array<{ value: LayoutColumns; label: string; aria: string; icon?: string }> = [
+      { value: "flow", label: "", aria: "여러줄 모드 (섹션 분류 · 기본)", icon: "list-tree" },
       { value: 2, label: "2", aria: "2열 그리드" },
       { value: 3, label: "3", aria: "3열 그리드" },
       { value: 4, label: "4", aria: "4열 그리드" },
       { value: "auto", label: "", aria: "세로 모드 (넓이 자동 맞춤)", icon: "layout-grid" },
-      { value: "scroll", label: "", aria: "가로 모드 (세로 펼침 · 가로 스크롤)", icon: "columns" },
-      { value: "flow", label: "", aria: "여러줄 모드 (섹션 분류)", icon: "list-tree" }
+      { value: "scroll", label: "", aria: "가로 모드 (세로 펼침 · 가로 스크롤)", icon: "columns" }
     ];
 
     this.layoutBtns = layoutOptions.map((opt) => {
@@ -821,6 +837,21 @@ export class FolderBoardView extends ItemView {
       });
     }
 
+    // [ID 6.5.58] 직속 카드 포함 전체 카드 사용자 지정 순서 반영 (기존 folderOrder와 100% 하위 호환)
+    const customOrder = this.plugin.getFolderOrder(normalizeFolderRef(currentFolder));
+    if (customOrder.includes(ROOT_CARD_ORDER_KEY)) {
+      const rank = new Map(customOrder.map((k, idx) => [k, idx]));
+      const fallbackRank = new Map(cards.map((c, idx) => [this.getCardOrderKey(c), idx]));
+      cards.sort((a, b) => {
+        const ka = this.getCardOrderKey(a);
+        const kb = this.getCardOrderKey(b);
+        const ra = rank.has(ka) ? rank.get(ka)! : Number.MAX_SAFE_INTEGER;
+        const rb = rank.has(kb) ? rank.get(kb)! : Number.MAX_SAFE_INTEGER;
+        if (ra !== rb) return ra - rb;
+        return (fallbackRank.get(ka) ?? 0) - (fallbackRank.get(kb) ?? 0);
+      });
+    }
+
     if (cards.length === 0) {
       this.focusedCardIndex = 0;
       this.focusedItemKey = null;
@@ -830,6 +861,10 @@ export class FolderBoardView extends ItemView {
 
     this.renderedCards = cards;
     return cards;
+  }
+
+  private getCardOrderKey(card: BoardCardModel): string {
+    return card.isRootCard ? ROOT_CARD_ORDER_KEY : card.folderPath;
   }
 
   private getFocusedTargetFolderPath(): string {
@@ -1236,12 +1271,9 @@ export class FolderBoardView extends ItemView {
     return clamped;
   }
 
-  private formatFlowCountLabel(cardModel: BoardCardModel, isScrollableWindow: boolean): string {
-    if (!isScrollableWindow) return String(cardModel.totalCount);
-    const limit = this.getFlowWindowLimit(cardModel);
-    const offset = this.getFlowWindowOffset(cardModel);
-    const end = Math.min(cardModel.items.length, offset + limit);
-    return `${offset + 1}–${end} / ${cardModel.items.length}`;
+  // [ID 6.5.59] 카드 헤더 카운트 간소화 -> 범위(1–15/41) 대신 폴더 전체 파일 수 숫자 1개만 표시해 제목 잘림과 시각적 잡음을 제거함
+  private formatFlowCountLabel(cardModel: BoardCardModel, _isScrollableWindow: boolean): string {
+    return String(cardModel.totalCount);
   }
 
   private updateFlowWindowDOM(cardIdx: number): void {
@@ -1338,11 +1370,13 @@ export class FolderBoardView extends ItemView {
       cls:
         "fb-card" +
         (cardModel.isRootCard ? " is-root-card" : "") +
+        (cardModel.isRootCard && cardIdx > 0 ? " is-root-moved" : "") +
         (cardModel.isCollapsedSection ? " is-section-collapsed" : "") +
         (isFocusedCard ? " is-focused-card" : "") +
         (isCarryCard ? " is-carry-target" : ""),
       attr: {
         "data-drop-folder": cardModel.folderPath,
+        "data-order-key": this.getCardOrderKey(cardModel),
         "data-card-index": String(cardIdx),
         ...(isScrollableWindow ? { "data-windowed": "true" } : {})
       }
@@ -1382,8 +1416,85 @@ export class FolderBoardView extends ItemView {
       );
     }
 
-    // [ID 6.5.38] 직속 영역은 상단 브레드크럼에 경로가 이미 표시되므로 헤더(제목·아이콘·직속 배지) 생략
-    if (!cardModel.isRootCard) {
+    // [ID 6.5.38 / 6.5.58] 직속 카드 헤더 정책
+    // -> 그리드·세로·가로 모드에서는 다른 카드와 통일감 있게 정식 카드 헤더(아이콘 + 제목 + 직속 배지 + 카운트)를 표시하고,
+    // -> 여러줄(flow) 모드에서는 맨 앞(0번) 무헤더 + 상단 호버 손잡이, 이동 시 은은한 미니 헤더(C안)를 적용함.
+    if (cardModel.isRootCard) {
+      if (isFlowMode && cardIdx === 0) {
+        const hoverZone = cardEl.createDiv({ cls: "fb-root-hover-zone" });
+        const hoverGrip = hoverZone.createDiv({
+          cls: "fb-root-hover-grip",
+          attr: {
+            draggable: "true",
+            "aria-label": "드래그하거나 Shift+←/→로 직속 카드 위치 이동"
+          }
+        });
+        setIcon(hoverGrip, "grip-horizontal");
+        hoverGrip.addEventListener("dragstart", (e) =>
+          this.handleCardDragStart(e, ROOT_CARD_ORDER_KEY, cardModel.title)
+        );
+      } else if (isFlowMode) {
+        const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
+        const rootHeader = cardEl.createDiv({
+          cls: "fb-card-header is-root-moved-header" + (isHeaderFocused ? " is-header-focused" : ""),
+          attr: { draggable: "true" }
+        });
+        const titleWrap = rootHeader.createDiv({ cls: "fb-card-title-wrap" });
+        const gripIcon = titleWrap.createSpan({ cls: "fb-root-header-grip" });
+        setIcon(gripIcon, "grip-horizontal");
+        titleWrap.createSpan({ cls: "fb-card-title is-root-moved-title", text: cardModel.title });
+
+        const metaEl = rootHeader.createDiv({ cls: "fb-card-meta" });
+        metaEl.createSpan({
+          cls: "fb-count",
+          text: this.formatFlowCountLabel(cardModel, isScrollableWindow)
+        });
+
+        rootHeader.addEventListener("dragstart", (e) =>
+          this.handleCardDragStart(e, ROOT_CARD_ORDER_KEY, cardModel.title)
+        );
+        rootHeader.addEventListener("click", () => {
+          this.selectedPaths.clear();
+          this.selectionAnchorIndex = null;
+          this.focusedCardIndex = cardIdx;
+          this.focusedItemKey = CARD_HEADER_KEY;
+          this.syncFocusAndSelectionDOM();
+          this.renderSelectionBar();
+          this.scrollFocusedIntoView();
+        });
+      } else {
+        // 그리드(2/3/4열) · 세로 · 가로 모드: 다른 카드들과 통일된 카드 헤더
+        const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
+        const rootHeader = cardEl.createDiv({
+          cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : ""),
+          attr: { draggable: "true" }
+        });
+        const titleWrap = rootHeader.createDiv({ cls: "fb-card-title-wrap" });
+        const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
+        setIcon(iconEl, "inbox");
+        titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
+        titleWrap.createSpan({ cls: "fb-root-pill", text: "직속" });
+
+        const metaEl = rootHeader.createDiv({ cls: "fb-card-meta" });
+        metaEl.createSpan({
+          cls: "fb-count",
+          text: this.formatFlowCountLabel(cardModel, isScrollableWindow)
+        });
+
+        rootHeader.addEventListener("dragstart", (e) =>
+          this.handleCardDragStart(e, ROOT_CARD_ORDER_KEY, cardModel.title)
+        );
+        rootHeader.addEventListener("click", () => {
+          this.selectedPaths.clear();
+          this.selectionAnchorIndex = null;
+          this.focusedCardIndex = cardIdx;
+          this.focusedItemKey = CARD_HEADER_KEY;
+          this.syncFocusAndSelectionDOM();
+          this.renderSelectionBar();
+          this.scrollFocusedIntoView();
+        });
+      }
+    } else {
       const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
       const headerEl = cardEl.createDiv({
         cls: "fb-card-header" + (isHeaderFocused ? " is-header-focused" : "")
@@ -3177,49 +3288,71 @@ export class FolderBoardView extends ItemView {
   }
 
   private async applyFolderCardReorder(
-    sourcePath: string,
-    targetPath: string,
+    sourceKey: string,
+    targetKey: string,
     position: "before" | "after"
   ): Promise<void> {
-    const folderCards = this.renderedCards.filter((c) => !c.isRootCard).map((c) => c.folderPath);
-    const fromIdx = folderCards.indexOf(sourcePath);
-    if (fromIdx === -1 || sourcePath === targetPath) return;
+    const allCardKeys = this.renderedCards.map((c) => this.getCardOrderKey(c));
+    const fromIdx = allCardKeys.indexOf(sourceKey);
+    if (fromIdx === -1 || sourceKey === targetKey) return;
 
-    folderCards.splice(fromIdx, 1);
-    const targetIdx = folderCards.indexOf(targetPath);
+    allCardKeys.splice(fromIdx, 1);
+    const targetIdx = allCardKeys.indexOf(targetKey);
     if (targetIdx === -1) return;
 
     const insertIdx = position === "before" ? targetIdx : targetIdx + 1;
-    folderCards.splice(insertIdx, 0, sourcePath);
+    allCardKeys.splice(insertIdx, 0, sourceKey);
 
-    await this.plugin.setFolderOrder(this.currentFolderPath, folderCards);
+    await this.plugin.setFolderOrder(this.currentFolderPath, allCardKeys);
     this.renderAll();
 
-    const newCardIdx = this.renderedCards.findIndex((c) => !c.isRootCard && c.folderPath === sourcePath);
+    const newCardIdx = this.renderedCards.findIndex((c) => this.getCardOrderKey(c) === sourceKey);
     if (newCardIdx >= 0) {
-      this.focusCardHeader(newCardIdx);
+      const movedCard = this.renderedCards[newCardIdx];
+      if (movedCard.isRootCard && this.plugin.settings.gridCols === "flow" && newCardIdx === 0) {
+        this.focusCardItem(newCardIdx, 0, { clearSelection: true, updatePreview: false });
+      } else {
+        this.focusCardHeader(newCardIdx);
+      }
     }
   }
 
   private async shiftFolderCardOrder(delta: -1 | 1): Promise<void> {
     const curCard = this.renderedCards[this.focusedCardIndex];
-    if (!curCard || curCard.isRootCard) return;
+    if (!curCard) return;
 
-    const folderCards = this.renderedCards.filter((c) => !c.isRootCard).map((c) => c.folderPath);
-    const idx = folderCards.indexOf(curCard.folderPath);
+    const prevItemKey = this.focusedItemKey;
+    const allCardKeys = this.renderedCards.map((c) => this.getCardOrderKey(c));
+    const curKey = this.getCardOrderKey(curCard);
+    const idx = allCardKeys.indexOf(curKey);
     if (idx === -1) return;
     const nextIdx = idx + delta;
-    if (nextIdx < 0 || nextIdx >= folderCards.length) return;
+    if (nextIdx < 0 || nextIdx >= allCardKeys.length) return;
 
-    const [moved] = folderCards.splice(idx, 1);
-    folderCards.splice(nextIdx, 0, moved);
+    const [moved] = allCardKeys.splice(idx, 1);
+    allCardKeys.splice(nextIdx, 0, moved);
 
-    await this.plugin.setFolderOrder(this.currentFolderPath, folderCards);
+    await this.plugin.setFolderOrder(this.currentFolderPath, allCardKeys);
     this.renderAll();
 
-    const newCardIdx = this.renderedCards.findIndex((c) => !c.isRootCard && c.folderPath === moved);
+    const newCardIdx = this.renderedCards.findIndex((c) => this.getCardOrderKey(c) === moved);
     if (newCardIdx >= 0) {
-      this.focusCardHeader(newCardIdx);
+      const movedCard = this.renderedCards[newCardIdx];
+      if (movedCard.isRootCard) {
+        if (prevItemKey && prevItemKey !== CARD_HEADER_KEY) {
+          const itemIdx = movedCard.items.findIndex((it) => it.key === prevItemKey);
+          this.focusCardItem(newCardIdx, itemIdx >= 0 ? itemIdx : 0, {
+            clearSelection: true,
+            updatePreview: false
+          });
+        } else if (this.plugin.settings.gridCols === "flow" && newCardIdx === 0) {
+          this.focusCardItem(newCardIdx, 0, { clearSelection: true, updatePreview: false });
+        } else {
+          this.focusCardHeader(newCardIdx);
+        }
+      } else {
+        this.focusCardHeader(newCardIdx);
+      }
     }
   }
 
@@ -3275,12 +3408,12 @@ export class FolderBoardView extends ItemView {
   private handleDragOver(e: DragEvent): void {
     if (this.draggingCardPath) {
       const cardEl = (e.target instanceof Element ? e.target.closest(".fb-card") : null) as HTMLElement | null;
-      if (!cardEl || cardEl.hasClass("is-root-card")) {
+      if (!cardEl) {
         this.clearReorderHighlight();
         return;
       }
-      const targetPath = normalizeFolderStr(cardEl.dataset.dropFolder);
-      if (!targetPath || targetPath === this.draggingCardPath) {
+      const targetKey = cardEl.dataset.orderKey || "";
+      if (!targetKey || targetKey === this.draggingCardPath) {
         this.clearReorderHighlight();
         return;
       }
@@ -3335,9 +3468,9 @@ export class FolderBoardView extends ItemView {
       this.handleDragEnd();
       if (targetEl) {
         e.preventDefault();
-        const targetPath = normalizeFolderStr(targetEl.dataset.dropFolder);
-        if (targetPath && targetPath !== srcPath) {
-          void this.applyFolderCardReorder(srcPath, targetPath, pos);
+        const targetKey = targetEl.dataset.orderKey || "";
+        if (targetKey && targetKey !== srcPath) {
+          void this.applyFolderCardReorder(srcPath, targetKey, pos);
         }
       }
       return;
@@ -3738,6 +3871,14 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
+    // ? (Shift+/): 단축키 치트시트 모달 열기
+    if (!meta && !e.altKey && (e.key === "?" || (e.shiftKey && code === "Slash"))) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openShortcutHelpModal();
+      return;
+    }
+
     // / (슬래시): 한 손 검색창 포커스
     if (!meta && !e.shiftKey && !e.altKey && code === "Slash") {
       e.preventDefault();
@@ -3912,12 +4053,13 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
-    // Shift + 좌/우: 폴더 카드 헤더 포커스 상태에서 카드 순서 좌우 이동
+    // Shift + 좌/우: 폴더 카드 헤더 포커스 또는 직속 카드 포커스 상태에서 카드 순서 좌우 이동
+    const curFocusedCard = this.renderedCards[this.focusedCardIndex];
     if (
       e.shiftKey &&
       !meta &&
       !e.altKey &&
-      this.focusedItemKey === CARD_HEADER_KEY &&
+      (this.focusedItemKey === CARD_HEADER_KEY || Boolean(curFocusedCard?.isRootCard)) &&
       (e.key === "ArrowLeft" || e.key === "ArrowRight")
     ) {
       e.preventDefault();
@@ -3971,7 +4113,7 @@ export class FolderBoardView extends ItemView {
       const { card, itemIndex } = this.findFocusedCardAndIndex();
       if (!card) return;
 
-      const hasHeaderStop = !card.isRootCard;
+      const hasHeaderStop = !card.isRootCard || this.plugin.settings.gridCols !== "flow" || this.focusedCardIndex > 0;
       const onHeader = this.focusedItemKey === CARD_HEADER_KEY;
       const count = card.items.length;
       const shouldLoopAtEdge = this.plugin.settings.verticalEdgeBehavior === "loop";

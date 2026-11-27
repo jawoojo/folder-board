@@ -26,7 +26,7 @@ export interface FolderBoardSettings {
 }
 
 export const DEFAULT_SETTINGS: FolderBoardSettings = {
-  gridCols: 3,
+  gridCols: "flow",
   sortBy: "name",
   openBehavior: "same-tab",
   verticalEdgeBehavior: "adaptive",
