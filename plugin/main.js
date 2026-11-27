@@ -181,6 +181,7 @@ var VIEW_TYPE_FOLDER_BOARD = "folder-board-view";
 var DRAG_MIME = "application/x-obsidian-folder-board";
 var CARD_REORDER_MIME = "application/x-obsidian-folder-board-card";
 var CARD_HEADER_KEY = "__card_header__";
+var FLOW_WINDOW_SIZE = 15;
 function normalizeFolderRef(folder) {
   if (!folder || folder.isRoot() || folder.path === "/") return "";
   return folder.path;
@@ -224,6 +225,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     this.isSubModalOpen = false;
     this.isInlineRenaming = false;
     this.renderedSortIcon = null;
+    // [ID 6.5.41] 여러줄 모드 가상 슬라이딩 윈도우 스크롤 오프셋 & 휠 누적기
+    // -> overflow: visible을 유지(하단 빈공간 0)하면서도 15개 초과 대용량 폴더 내부를 휠·방향키로 실시간 스크롤함.
+    this.flowScrollOffsets = /* @__PURE__ */ new Map();
+    this.flowWheelAccum = /* @__PURE__ */ new Map();
     // [ID 6.5.36] viewScope와 window capture 간 중복 실행 방지용 이벤트 추적기
     // -> e.defaultPrevented 대신 WeakSet을 사용해 옵시디언 기본 핫키(Cmd+D 등)가 preventDefault()를 걸어도 보드 동작이 정상 실행되게 함.
     this.handledKeyEvents = /* @__PURE__ */ new WeakSet();
@@ -531,6 +536,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         if (mode !== "scroll" && mode !== "flow") return;
         const target = e.target;
         if (mode === "scroll" && target?.closest(".fb-card-body")) return;
+        if (mode === "flow" && target?.closest('.fb-card[data-windowed="true"]')) return;
         if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
           this.canvasEl.scrollLeft += e.deltaY;
           e.preventDefault();
@@ -953,16 +959,107 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       this.renderCardElement(this.gridEl, cardModel, cardIdx, isCarrying, isFlowMode);
     });
   }
+  getFlowWindowKey(cardModel) {
+    return cardModel.isRootCard ? "__root__" : cardModel.folderPath;
+  }
+  getFlowWindowOffset(cardModel) {
+    const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+    const saved = this.flowScrollOffsets.get(this.getFlowWindowKey(cardModel)) || 0;
+    const clamped = Math.max(0, Math.min(saved, maxOffset));
+    if (clamped !== saved) {
+      this.flowScrollOffsets.set(this.getFlowWindowKey(cardModel), clamped);
+    }
+    return clamped;
+  }
+  formatFlowCountLabel(cardModel, isWindowed) {
+    if (!isWindowed) return String(cardModel.totalCount);
+    const offset = this.getFlowWindowOffset(cardModel);
+    const end = Math.min(cardModel.items.length, offset + FLOW_WINDOW_SIZE);
+    return `${offset + 1}\u2013${end} / ${cardModel.items.length}`;
+  }
+  updateFlowWindowDOM(cardIdx) {
+    const cardModel = this.renderedCards[cardIdx];
+    if (!cardModel || this.plugin.settings.gridCols !== "flow") return;
+    if (cardModel.isCollapsedSection || cardModel.items.length <= FLOW_WINDOW_SIZE) return;
+    const cardEl = this.gridEl.querySelector(`.fb-card[data-card-index="${cardIdx}"]`);
+    if (!cardEl) return;
+    const listEl = cardEl.querySelector(".fb-card-body");
+    if (!listEl) return;
+    const offset = this.getFlowWindowOffset(cardModel);
+    const isCarrying = this.carryPaths.length > 0;
+    listEl.empty();
+    this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, offset, offset + FLOW_WINDOW_SIZE);
+    const countEl = cardEl.querySelector(".fb-count");
+    if (countEl) {
+      countEl.setText(this.formatFlowCountLabel(cardModel, true));
+    }
+    const thumbEl = cardEl.querySelector(".fb-flow-scroll-thumb");
+    if (thumbEl) {
+      const total = cardModel.items.length;
+      const pctLeft = offset / total * 100;
+      const pctWidth = Math.max(8, FLOW_WINDOW_SIZE / total * 100);
+      thumbEl.style.left = `${pctLeft}%`;
+      thumbEl.style.width = `${pctWidth}%`;
+    }
+  }
+  ensureFlowWindowIncludes(cardIdx, itemIndex) {
+    if (this.plugin.settings.gridCols !== "flow") return;
+    const cardModel = this.renderedCards[cardIdx];
+    if (!cardModel || cardModel.isCollapsedSection || cardModel.items.length <= FLOW_WINDOW_SIZE) return;
+    const key = this.getFlowWindowKey(cardModel);
+    const curOffset = this.getFlowWindowOffset(cardModel);
+    let nextOffset = curOffset;
+    if (itemIndex < curOffset) {
+      nextOffset = itemIndex;
+    } else if (itemIndex >= curOffset + FLOW_WINDOW_SIZE) {
+      nextOffset = itemIndex - FLOW_WINDOW_SIZE + 1;
+    }
+    const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+    nextOffset = Math.max(0, Math.min(nextOffset, maxOffset));
+    if (nextOffset !== curOffset) {
+      this.flowScrollOffsets.set(key, nextOffset);
+      this.updateFlowWindowDOM(cardIdx);
+    }
+  }
   renderCardElement(parentEl, cardModel, cardIdx, isCarrying, isFlowMode) {
     const isFocusedCard = !isCarrying && cardIdx === this.focusedCardIndex;
     const isCarryCard = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === cardModel.folderPath;
+    const isWindowed = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_WINDOW_SIZE;
     const cardEl = parentEl.createDiv({
       cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
       attr: {
         "data-drop-folder": cardModel.folderPath,
-        "data-card-index": String(cardIdx)
+        "data-card-index": String(cardIdx),
+        ...isWindowed ? { "data-windowed": "true" } : {}
       }
     });
+    if (isWindowed) {
+      const winKey = this.getFlowWindowKey(cardModel);
+      cardEl.addEventListener(
+        "wheel",
+        (e) => {
+          if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const accum = (this.flowWheelAccum.get(winKey) || 0) + e.deltaY;
+          const stepPx = 24;
+          const rowSteps = Math.trunc(accum / stepPx);
+          if (rowSteps === 0) {
+            this.flowWheelAccum.set(winKey, accum);
+            return;
+          }
+          this.flowWheelAccum.set(winKey, accum - rowSteps * stepPx);
+          const curOffset = this.getFlowWindowOffset(cardModel);
+          const maxOffset = Math.max(0, cardModel.items.length - FLOW_WINDOW_SIZE);
+          const nextOffset = Math.max(0, Math.min(curOffset + rowSteps, maxOffset));
+          if (nextOffset !== curOffset) {
+            this.flowScrollOffsets.set(winKey, nextOffset);
+            this.updateFlowWindowDOM(cardIdx);
+          }
+        },
+        { passive: false }
+      );
+    }
     if (!cardModel.isRootCard) {
       const isHeaderFocused = isFocusedCard && this.focusedItemKey === CARD_HEADER_KEY;
       const headerEl = cardEl.createDiv({
@@ -989,7 +1086,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         headerEl.createDiv({ cls: "fb-section-rule" });
       }
       const metaEl = headerEl.createDiv({ cls: "fb-card-meta" });
-      metaEl.createSpan({ cls: "fb-count", text: String(cardModel.totalCount) });
+      metaEl.createSpan({
+        cls: "fb-count",
+        text: this.formatFlowCountLabel(cardModel, isWindowed)
+      });
       headerEl.setAttr("draggable", "true");
       headerEl.addEventListener(
         "dragstart",
@@ -1046,13 +1146,28 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       listEl.createDiv({ cls: "fb-empty-card", text: "\uBE44\uC5B4 \uC788\uC74C" });
       return;
     }
-    cardModel.items.forEach((item, itemIdx) => {
+    const startIdx = isWindowed ? this.getFlowWindowOffset(cardModel) : 0;
+    const endIdx = isWindowed ? Math.min(cardModel.items.length, startIdx + FLOW_WINDOW_SIZE) : cardModel.items.length;
+    this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx);
+    if (isWindowed) {
+      const track = cardEl.createDiv({ cls: "fb-flow-scroll-track" });
+      const thumb = track.createDiv({ cls: "fb-flow-scroll-thumb" });
+      const total = cardModel.items.length;
+      thumb.style.left = `${startIdx / total * 100}%`;
+      thumb.style.width = `${Math.max(8, FLOW_WINDOW_SIZE / total * 100)}%`;
+    }
+  }
+  renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx) {
+    const cutSet = new Set(this.clipboardMode === "cut" ? this.clipboardPaths : []);
+    for (let itemIdx = startIdx; itemIdx < endIdx && itemIdx < cardModel.items.length; itemIdx++) {
+      const item = cardModel.items[itemIdx];
       const isFocused = !isCarrying && cardIdx === this.focusedCardIndex && this.focusedItemKey === item.key;
+      const isCut = cutSet.has(item.path);
       if (item.type === "folder") {
         const isSelected = this.selectedPaths.has(item.path);
         const isCarryFolder = isCarrying && cardIdx === this.carryCardIndex && this.carryTargetFolderPath === item.path;
         const row = listEl.createDiv({
-          cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCarryFolder ? " is-carry-target" : ""),
+          cls: "tree-item-self is-clickable nav-folder-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCut ? " is-cut" : "") + (isCarryFolder ? " is-carry-target" : ""),
           attr: {
             "data-path": item.path,
             "data-drag-path": item.path,
@@ -1111,7 +1226,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
       } else {
         const isSelected = this.selectedPaths.has(item.path);
         const row = listEl.createDiv({
-          cls: "tree-item-self is-clickable nav-file-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : ""),
+          cls: "tree-item-self is-clickable nav-file-title fb-row" + (isSelected ? " is-selected" : "") + (isFocused ? " is-focused" : "") + (isCut ? " is-cut" : ""),
           attr: {
             "data-path": item.path,
             "data-drag-path": item.path,
@@ -1135,7 +1250,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
         });
         row.addEventListener("dragstart", (e) => this.handleDragStart(e, item.path, false));
       }
-    });
+    }
   }
   renderShelf() {
     this.shelfPaths = this.shelfPaths.filter((p) => this.app.vault.getAbstractFileByPath(p) !== null);
@@ -1247,6 +1362,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const safeIdx = Math.max(0, Math.min(itemIndex, card.items.length - 1));
     const item = card.items[safeIdx];
     this.focusedItemKey = item.key;
+    this.ensureFlowWindowIncludes(cardIdx, safeIdx);
     this.syncFocusAndSelectionDOM();
     this.renderSelectionBar();
     if (updatePreview && this.quickLookOpen && this.selectedPaths.size === 0 && item.type === "file") {
@@ -1315,6 +1431,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian3.ItemView {
     const safeTarget = Math.max(0, Math.min(targetIdx, card.items.length - 1));
     this.focusedCardIndex = cardIdx;
     this.focusedItemKey = card.items[safeTarget].key;
+    this.ensureFlowWindowIncludes(cardIdx, safeTarget);
     this.syncFocusAndSelectionDOM();
     this.renderSelectionBar();
     this.scrollFocusedIntoView();

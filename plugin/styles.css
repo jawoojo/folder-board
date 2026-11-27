@@ -374,6 +374,26 @@
   text-align: left;
 }
 
+/* [ID 6.7.10] 여러줄 모드 가상 슬라이딩 윈도우 2px 미니 스크롤 인디케이터 */
+.fb-flow-scroll-track {
+  position: relative;
+  height: 2px;
+  margin: 4px 6px 1px 19px;
+  border-radius: 99px;
+  background-color: color-mix(in srgb, var(--text-normal) 10%, transparent);
+  overflow: hidden;
+  break-before: avoid;
+  -webkit-column-break-before: avoid;
+}
+.fb-flow-scroll-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 99px;
+  background-color: color-mix(in srgb, var(--text-normal) 38%, transparent);
+  transition: left 60ms linear, width 60ms linear;
+}
+
 /* ==========================================================================
    네이티브 미니 탐색기 카드
    ========================================================================== */
