@@ -17,6 +17,21 @@ export class FolderBoardSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    // [ID 6.4.2] 커맨드 팔레트(Cmd+P) 사용자 지정 검색 별칭 (한영 전환 없이 즉시 호출)
+    new Setting(containerEl)
+      .setName("커맨드 팔레트(⌘P) 열기 별칭")
+      .setDesc("⌘P에서 한영 전환 없이 바로 찾을 문구를 입력하세요 (예: 폴더 보드 열기, 보드). 변경 즉시 반영됩니다.")
+      .addText((text) =>
+        text
+          .setPlaceholder("폴더 보드 열기")
+          .setValue(this.plugin.settings.openCommandAlias)
+          .onChange(async (value) => {
+            this.plugin.settings.openCommandAlias = value;
+            this.plugin.syncCommandNames();
+            await this.plugin.saveSettings();
+          })
+      );
+
     new Setting(containerEl)
       .setName("기본 레이아웃")
       .addDropdown((dd) =>

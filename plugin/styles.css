@@ -194,6 +194,7 @@
 
 .fb-grid {
   display: grid;
+  grid-auto-flow: dense;
   gap: 10px;
   align-items: stretch;
   flex: 1;
@@ -654,6 +655,7 @@
    네이티브 미니 탐색기 카드
    ========================================================================== */
 .fb-card {
+  position: relative;
   background-color: var(--background-secondary);
   border: 1px solid var(--divider-color, var(--background-modifier-border));
   border-radius: var(--radius-m, 8px);
@@ -663,6 +665,57 @@
   flex-direction: column;
   overflow: hidden;
   transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+/* [ID 6.7.18] 카드 모드(2/3/4열 그리드 · 세로) 세로 확장(화면 1줄) + 하단 호버 기호 전용 토글 */
+.fb-grid:not(.fb-layout-flow):not(.fb-layout-scroll) .fb-card.is-card-tall {
+  grid-row: span var(--fb-tall-span, 2);
+}
+.fb-grid.fb-rows-1 .fb-card-tall-zone {
+  display: none;
+}
+.fb-card-tall-zone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+.fb-card-tall-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px !important;
+  height: 15px !important;
+  padding: 0 !important;
+  border-radius: 99px !important;
+  border: 1px solid var(--background-modifier-border-hover) !important;
+  background-color: var(--background-primary) !important;
+  color: var(--text-muted) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16) !important;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px) scale(0.92);
+  transition: opacity 130ms ease, transform 130ms ease, color 110ms ease, border-color 110ms ease;
+}
+.fb-card-tall-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-card-tall-zone:hover > .fb-card-tall-btn,
+.fb-card-tall-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+.fb-card-tall-btn:hover {
+  color: var(--text-normal) !important;
+  border-color: color-mix(in srgb, var(--text-normal) 42%, transparent) !important;
 }
 
 .fb-card:hover {

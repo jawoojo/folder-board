@@ -184,7 +184,79 @@ var ShortcutHelpModal = class extends import_obsidian2.Modal {
 // src/native-sync.ts
 var import_obsidian3 = require("obsidian");
 var fallbackCache = null;
+var stickyFolderClosed = null;
+var stickyFolderOpen = null;
+var mfiSvgIdCounter = 0;
 var CACHE_TTL_MS = 2e3;
+function tryExtractMaterialIcon(app, path, fallbackIcon, isExpandedFolder) {
+  try {
+    const plugins = app.plugins;
+    if (plugins?.enabledPlugins && !plugins.enabledPlugins.has("material-icon-theme")) return null;
+    const mfi = plugins?.plugins?.["material-icon-theme"];
+    if (!mfi) return null;
+    let svgMarkup = "";
+    if (fallbackIcon === "folder") {
+      if (mfi.settings?.applyToFolders === false) return null;
+      if (typeof mfi.getFolderIconKey !== "function" || typeof mfi.getIconSet !== "function" || typeof mfi.getSvg !== "function") {
+        return null;
+      }
+      const isCollapsed = isExpandedFolder === void 0 ? true : !isExpandedFolder;
+      const key = mfi.getFolderIconKey(path, isCollapsed);
+      const set = mfi.getIconSet(key);
+      if (!set) return null;
+      svgMarkup = mfi.getSvg(set);
+    } else if (fallbackIcon === "file-text") {
+      if (mfi.settings?.applyToFiles === false) return null;
+      if (typeof mfi.getFileIconSvg !== "function") return null;
+      svgMarkup = mfi.getFileIconSvg(path);
+    } else {
+      return null;
+    }
+    if (!svgMarkup) return null;
+    const parsed = new DOMParser().parseFromString(svgMarkup, "image/svg+xml");
+    if (parsed.querySelector("parsererror")) return null;
+    const svgRoot = parsed.documentElement;
+    if (!svgRoot || svgRoot.nodeName.toLowerCase() !== "svg") return null;
+    const svgEl = document.importNode(svgRoot, true);
+    const idNodes = Array.from(svgEl.querySelectorAll("[id]"));
+    if (svgEl.hasAttribute("id")) idNodes.unshift(svgEl);
+    if (idNodes.length > 0) {
+      const prefix = `fb-mfi-${++mfiSvgIdCounter}-`;
+      const idMap = /* @__PURE__ */ new Map();
+      for (const node of idNodes) {
+        const oldId = node.getAttribute("id");
+        if (!oldId) continue;
+        const nextId = `${prefix}${oldId}`;
+        idMap.set(oldId, nextId);
+        node.setAttribute("id", nextId);
+      }
+      for (const node of [svgEl, ...Array.from(svgEl.querySelectorAll("*"))]) {
+        for (const attr of Array.from(node.attributes)) {
+          let val = attr.value;
+          if (attr.localName === "href" && val.startsWith("#")) {
+            const mapped = idMap.get(val.slice(1));
+            if (mapped) val = `#${mapped}`;
+          }
+          val = val.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g, (m, _q, ref) => {
+            const mapped = idMap.get(ref);
+            return mapped ? `url(#${mapped})` : m;
+          });
+          if (val !== attr.value) {
+            node.setAttributeNS(attr.namespaceURI, attr.name, val);
+          }
+        }
+      }
+    }
+    svgEl.setAttribute("width", "15");
+    svgEl.setAttribute("height", "15");
+    const wrapper = document.createElement("span");
+    wrapper.className = "mfi-icon fb-cloned-native-icon";
+    wrapper.appendChild(svgEl);
+    return { kind: "node", template: wrapper };
+  } catch {
+    return null;
+  }
+}
 function invalidateNativeIconCache() {
   fallbackCache = null;
 }
@@ -445,11 +517,13 @@ function getFallbackIconCache(fileItems) {
       if (defaultFolderClosed && defaultFolderOpen) break;
     }
   }
+  if (defaultFolderClosed) stickyFolderClosed = defaultFolderClosed;
+  if (defaultFolderOpen) stickyFolderOpen = defaultFolderOpen;
   fallbackCache = {
     builtAt: now,
     byExt,
-    defaultFolderClosed,
-    defaultFolderOpen,
+    defaultFolderClosed: defaultFolderClosed || stickyFolderClosed,
+    defaultFolderOpen: defaultFolderOpen || stickyFolderOpen,
     defaultFolderClosedHtml,
     defaultFolderOpenHtml
   };
@@ -470,6 +544,11 @@ function applyNativeDecoration(app, path, iconContainer, titleEl, fallbackIcon, 
   const rowEl = titleEl.parentElement instanceof HTMLElement ? titleEl.parentElement : null;
   if (extractPseudoIcon(titleEl) || extractPseudoIcon(rowEl)) {
     iconContainer.addClass("is-hidden");
+    return;
+  }
+  const materialIcon = tryExtractMaterialIcon(app, path, fallbackIcon, isExpandedFolder);
+  if (materialIcon) {
+    renderExtractedIcon(iconContainer, materialIcon);
     return;
   }
   const cache = fileItems ? getFallbackIconCache(fileItems) : null;
@@ -501,7 +580,7 @@ function applyNativeDecoration(app, path, iconContainer, titleEl, fallbackIcon, 
       return;
     }
   }
-  (0, import_obsidian3.setIcon)(iconContainer, fallbackIcon);
+  (0, import_obsidian3.setIcon)(iconContainer, fallbackIcon === "folder" && isExpandedFolder ? "folder-open" : fallbackIcon);
 }
 function openNativeFileMenu(app, event, target, cb) {
   const menu = new import_obsidian3.Menu();
@@ -957,9 +1036,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     this.colResizersEl = this.canvasEl.createDiv({ cls: "fb-col-resizers" });
     this.resizeObserver = new ResizeObserver(() => {
       if (this.renderedCards.length === 0) return;
-      if (this.plugin.settings.gridCols === "auto") {
+      const mode = this.plugin.settings.gridCols;
+      if (mode === "auto" || typeof mode === "number") {
         this.applyGridLayoutClasses(this.renderedCards.length);
-      } else if (this.plugin.settings.gridCols === "flow") {
+      } else if (mode === "flow") {
         const nextH = this.canvasEl.clientHeight;
         if (Math.abs(nextH - this.lastCanvasHeight) >= 12 && this.plugin.hasAnyDynamicFlowWindow()) {
           this.lastCanvasHeight = nextH;
@@ -1378,22 +1458,30 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     this.canvasEl.toggleClass("is-horizontal-scroll", isHorizontalCanvas);
     if (prefLayout === "scroll") {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
+      this.gridEl.style.removeProperty("--fb-tall-span");
       this.gridEl.className = "fb-grid fb-layout-scroll";
     } else if (prefLayout === "flow") {
       const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
       this.gridEl.style.setProperty("--fb-flow-col-width", `${colW}px`);
+      this.gridEl.style.removeProperty("--fb-tall-span");
       this.gridEl.className = cardCount === 0 ? "fb-grid fb-layout-flow is-empty" : "fb-grid fb-layout-flow";
     } else if (prefLayout === "auto") {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
       const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
       const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
       const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
+      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
+      const tallSpan = rowClass === "fb-rows-1" ? 1 : Math.max(2, Math.round((availH + 10) / 330));
+      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
       this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
     } else {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
       const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
       const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
       const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
+      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
+      const tallSpan = rowClass === "fb-rows-1" ? 1 : rowClass === "fb-rows-2" ? 2 : Math.max(2, Math.round((availH + 10) / 350));
+      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
       this.gridEl.className = `fb-grid fb-cols-${effectiveCols} ${rowClass}`;
     }
   }
@@ -1645,11 +1733,13 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     const isResizableFlowCard = isFlowMode && !cardModel.isCollapsedSection && cardModel.items.length > FLOW_SIZE_SM;
     const windowLimit = isResizableFlowCard ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
     const isScrollableWindow = isResizableFlowCard && cardModel.items.length > windowLimit;
+    const cardKey = this.getCardOrderKey(cardModel);
+    const isTallGridCard = !isFlowMode && this.plugin.settings.gridCols !== "scroll" && this.plugin.isGridCardTall(cardKey);
     const cardEl = parentEl.createDiv({
-      cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isRootCard && cardIdx > 0 ? " is-root-moved" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
+      cls: "fb-card" + (cardModel.isRootCard ? " is-root-card" : "") + (cardModel.isRootCard && cardIdx > 0 ? " is-root-moved" : "") + (cardModel.isCollapsedSection ? " is-section-collapsed" : "") + (isTallGridCard ? " is-card-tall" : "") + (isFocusedCard ? " is-focused-card" : "") + (isCarryCard ? " is-carry-target" : ""),
       attr: {
         "data-drop-folder": cardModel.folderPath,
-        "data-order-key": this.getCardOrderKey(cardModel),
+        "data-order-key": cardKey,
         "data-card-index": String(cardIdx),
         ...isScrollableWindow ? { "data-windowed": "true" } : {}
       }
@@ -1822,6 +1912,26 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
       });
     }
     this.renderCardBodyAndFooter(cardEl, cardModel, cardIdx, isCarrying, isFlowMode);
+    if (!isFlowMode && this.plugin.settings.gridCols !== "scroll") {
+      const tallZone = cardEl.createDiv({ cls: "fb-card-tall-zone" });
+      const tallBtn = tallZone.createEl("button", {
+        cls: "fb-card-tall-btn",
+        attr: {
+          type: "button",
+          "aria-label": isTallGridCard ? "\uAE30\uBCF8 \uD06C\uAE30\uB85C \uCD95\uC18C" : "\uD654\uBA74 1\uC904 \uB192\uC774\uB85C \uD655\uC7A5"
+        }
+      });
+      (0, import_obsidian4.setIcon)(tallBtn, isTallGridCard ? "chevrons-up" : "chevrons-down");
+      tallBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nextTall = !this.plugin.isGridCardTall(cardKey);
+        void this.plugin.toggleGridCardTall(cardKey);
+        cardEl.toggleClass("is-card-tall", nextTall);
+        tallBtn.empty();
+        (0, import_obsidian4.setIcon)(tallBtn, nextTall ? "chevrons-up" : "chevrons-down");
+        tallBtn.setAttr("aria-label", nextTall ? "\uAE30\uBCF8 \uD06C\uAE30\uB85C \uCD95\uC18C" : "\uD654\uBA74 1\uC904 \uB192\uC774\uB85C \uD655\uC7A5");
+      });
+    }
   }
   // [ID 6.5.54] 카드 본문·하단 리사이즈 바 독립 렌더링 (헤더/→ 화살표 DOM 보존용)
   // -> 폴더 접기/펼치기·크기 변경 시 카드 헤더를 파괴하지 않고 본문만 부분 교체해 Baseline 테마 아이콘 깜박임과 끊김을 원천 제거함.
@@ -4086,6 +4196,13 @@ var FolderBoardSettingTab = class extends import_obsidian5.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    new import_obsidian5.Setting(containerEl).setName("\uCEE4\uB9E8\uB4DC \uD314\uB808\uD2B8(\u2318P) \uC5F4\uAE30 \uBCC4\uCE6D").setDesc("\u2318P\uC5D0\uC11C \uD55C\uC601 \uC804\uD658 \uC5C6\uC774 \uBC14\uB85C \uCC3E\uC744 \uBB38\uAD6C\uB97C \uC785\uB825\uD558\uC138\uC694 (\uC608: \uD3F4\uB354 \uBCF4\uB4DC \uC5F4\uAE30, \uBCF4\uB4DC). \uBCC0\uACBD \uC989\uC2DC \uBC18\uC601\uB429\uB2C8\uB2E4.").addText(
+      (text) => text.setPlaceholder("\uD3F4\uB354 \uBCF4\uB4DC \uC5F4\uAE30").setValue(this.plugin.settings.openCommandAlias).onChange(async (value) => {
+        this.plugin.settings.openCommandAlias = value;
+        this.plugin.syncCommandNames();
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian5.Setting(containerEl).setName("\uAE30\uBCF8 \uB808\uC774\uC544\uC6C3").addDropdown(
       (dd) => dd.addOption("flow", "\uC5EC\uB7EC\uC904 \uBAA8\uB4DC (\uC139\uC158 \uBD84\uB958 \xB7 \uAE30\uBCF8)").addOption("2", "2\uC5F4 \uADF8\uB9AC\uB4DC").addOption("3", "3\uC5F4 \uADF8\uB9AC\uB4DC").addOption("4", "4\uC5F4 \uADF8\uB9AC\uB4DC").addOption("auto", "\uC138\uB85C \uBAA8\uB4DC (\uB113\uC774 \uC790\uB3D9 \uB9DE\uCDA4)").addOption("scroll", "\uAC00\uB85C \uBAA8\uB4DC (\uC138\uB85C \uD3BC\uCE68 \xB7 \uAC00\uB85C \uC2A4\uD06C\uB864)").setValue(String(this.plugin.settings.gridCols)).onChange(async (value) => {
         this.plugin.settings.gridCols = value === "scroll" || value === "auto" || value === "flow" ? value : Number(value);
@@ -4142,7 +4259,9 @@ var DEFAULT_SETTINGS = {
   collapsedFlowSections: [],
   flowWindowSizes: {},
   flowColumnWidth: 270,
-  quickLookSplitRatio: 0.4
+  quickLookSplitRatio: 0.4,
+  openCommandAlias: "\uD3F4\uB354 \uBCF4\uB4DC \uC5F4\uAE30",
+  tallGridCards: []
 };
 
 // src/main.ts
@@ -4152,6 +4271,9 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
     this.expandedSet = /* @__PURE__ */ new Set();
     this.collapsedFlowSet = /* @__PURE__ */ new Set();
+    this.tallGridCardSet = /* @__PURE__ */ new Set();
+    this.openBoardCmd = null;
+    this.openBoardHereCmd = null;
   }
   async onload() {
     await this.loadSettings();
@@ -4159,17 +4281,17 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     this.addRibbonIcon("layout-grid", "Folder Board", () => {
       void this.activateBoardView();
     });
-    this.addCommand({
+    this.openBoardCmd = this.addCommand({
       id: "open-folder-board",
-      name: "Open 2D Folder Board",
+      name: this.buildOpenCommandLabel(false),
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "e" }],
       callback: () => {
         void this.activateBoardView();
       }
     });
-    this.addCommand({
+    this.openBoardHereCmd = this.addCommand({
       id: "open-folder-board-here",
-      name: "Open 2D Folder Board in current folder",
+      name: this.buildOpenCommandLabel(true),
       callback: () => {
         const active = this.app.workspace.getActiveFile();
         const folderPath = active?.parent && !active.parent.isRoot() ? active.parent.path : "";
@@ -4177,6 +4299,24 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
       }
     });
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
+  }
+  // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 즉시 반영 (핫키 ID 보존)
+  // -> 한글 등 원하는 검색 문구를 추가해 한영 전환 없이 Cmd+P에서 바로 폴더 보드를 열 수 있게 함.
+  buildOpenCommandLabel(inCurrentFolder) {
+    const alias = (this.settings.openCommandAlias || "").trim();
+    if (!inCurrentFolder) {
+      return alias ? `Open 2D Folder Board \xB7 ${alias}` : "Open 2D Folder Board";
+    }
+    return alias ? `Open 2D Folder Board in current folder \xB7 ${alias} (\uD604\uC7AC \uD3F4\uB354)` : "Open 2D Folder Board in current folder";
+  }
+  syncCommandNames() {
+    const prefix = `${this.manifest.name}: `;
+    if (this.openBoardCmd) {
+      this.openBoardCmd.name = `${prefix}${this.buildOpenCommandLabel(false)}`;
+    }
+    if (this.openBoardHereCmd) {
+      this.openBoardHereCmd.name = `${prefix}${this.buildOpenCommandLabel(true)}`;
+    }
   }
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
@@ -4230,12 +4370,17 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
       }
       delete this.settings.expandedFlowWindows;
     }
+    if (typeof this.settings.openCommandAlias !== "string") {
+      this.settings.openCommandAlias = DEFAULT_SETTINGS.openCommandAlias;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
+    this.tallGridCardSet = new Set(this.settings.tallGridCards || []);
   }
   async saveSettings() {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
+    this.settings.tallGridCards = [...this.tallGridCardSet];
     await this.saveData(this.settings);
   }
   isFolderExpanded(path) {
@@ -4293,9 +4438,21 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
   hasAnyDynamicFlowWindow() {
     return Object.values(this.settings.flowWindowSizes).some((v) => v === "lg" || typeof v === "number");
   }
+  // [ID 6.6.10] 카드 모드(그리드·세로) 세로 확장(화면 1줄) 카드 상태 영속 관리
+  isGridCardTall(key) {
+    return this.tallGridCardSet.has(key);
+  }
+  async toggleGridCardTall(key) {
+    const next = !this.tallGridCardSet.has(key);
+    if (next) this.tallGridCardSet.add(key);
+    else this.tallGridCardSet.delete(key);
+    await this.saveSettings();
+    return next;
+  }
   async resetAllExpandedStates() {
     this.expandedSet.clear();
     this.collapsedFlowSet.clear();
+    this.tallGridCardSet.clear();
     this.settings.flowWindowSizes = {};
     await this.saveSettings();
   }
@@ -4309,6 +4466,11 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     if (this.collapsedFlowSet.has(oldPath)) {
       this.collapsedFlowSet.delete(oldPath);
       this.collapsedFlowSet.add(newPath);
+      changed = true;
+    }
+    if (this.tallGridCardSet.has(oldPath)) {
+      this.tallGridCardSet.delete(oldPath);
+      this.tallGridCardSet.add(newPath);
       changed = true;
     }
     if (oldPath in this.settings.flowWindowSizes) {

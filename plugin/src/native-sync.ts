@@ -37,7 +37,104 @@ interface NativeIconFallbackCache {
 }
 
 let fallbackCache: NativeIconFallbackCache | null = null;
+let stickyFolderClosed: ExtractedIcon | null = null;
+let stickyFolderOpen: ExtractedIcon | null = null;
+let mfiSvgIdCounter = 0;
 const CACHE_TTL_MS = 2000;
+
+interface MaterialIconPluginLike {
+  settings?: {
+    applyToFolders?: boolean;
+    applyToFiles?: boolean;
+  };
+  getFolderIconKey?: (path: string, isCollapsed: boolean) => string;
+  getIconSet?: (key: string) => { dark?: string; light?: string } | undefined;
+  getSvg?: (iconSet: { dark?: string; light?: string }) => string;
+  getFileIconSvg?: (path: string) => string;
+}
+
+// [ID 6.2.6] Material Icon Theme 안전 보조 연동 (좌측 탐색기 전체 접힘/사이드바 닫힘 시에도 열림·닫힘 폴더 아이콘 완벽 보장)
+// -> 플러그인이 설치·활성화된 경우에만 try/catch로 안전하게 SVG를 조회하며, 미설치·버전 변경 시에는 자동으로 범용 DOM 미러링으로 폴백함.
+function tryExtractMaterialIcon(
+  app: App,
+  path: string,
+  fallbackIcon: "folder" | "file-text" | "inbox",
+  isExpandedFolder?: boolean
+): ExtractedIcon | null {
+  try {
+    const plugins = (app as unknown as { plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> } })
+      .plugins;
+    if (plugins?.enabledPlugins && !plugins.enabledPlugins.has("material-icon-theme")) return null;
+    const mfi = plugins?.plugins?.["material-icon-theme"] as MaterialIconPluginLike | undefined;
+    if (!mfi) return null;
+
+    let svgMarkup = "";
+    if (fallbackIcon === "folder") {
+      if (mfi.settings?.applyToFolders === false) return null;
+      if (typeof mfi.getFolderIconKey !== "function" || typeof mfi.getIconSet !== "function" || typeof mfi.getSvg !== "function") {
+        return null;
+      }
+      const isCollapsed = isExpandedFolder === undefined ? true : !isExpandedFolder;
+      const key = mfi.getFolderIconKey(path, isCollapsed);
+      const set = mfi.getIconSet(key);
+      if (!set) return null;
+      svgMarkup = mfi.getSvg(set);
+    } else if (fallbackIcon === "file-text") {
+      if (mfi.settings?.applyToFiles === false) return null;
+      if (typeof mfi.getFileIconSvg !== "function") return null;
+      svgMarkup = mfi.getFileIconSvg(path);
+    } else {
+      return null;
+    }
+
+    if (!svgMarkup) return null;
+    const parsed = new DOMParser().parseFromString(svgMarkup, "image/svg+xml");
+    if (parsed.querySelector("parsererror")) return null;
+    const svgRoot = parsed.documentElement;
+    if (!svgRoot || svgRoot.nodeName.toLowerCase() !== "svg") return null;
+
+    const svgEl = document.importNode(svgRoot, true) as Element;
+    // 동일 SVG 내부 gradient/clipPath id 충돌 방지
+    const idNodes = Array.from(svgEl.querySelectorAll("[id]"));
+    if (svgEl.hasAttribute("id")) idNodes.unshift(svgEl);
+    if (idNodes.length > 0) {
+      const prefix = `fb-mfi-${++mfiSvgIdCounter}-`;
+      const idMap = new Map<string, string>();
+      for (const node of idNodes) {
+        const oldId = node.getAttribute("id");
+        if (!oldId) continue;
+        const nextId = `${prefix}${oldId}`;
+        idMap.set(oldId, nextId);
+        node.setAttribute("id", nextId);
+      }
+      for (const node of [svgEl, ...Array.from(svgEl.querySelectorAll("*"))]) {
+        for (const attr of Array.from(node.attributes)) {
+          let val = attr.value;
+          if (attr.localName === "href" && val.startsWith("#")) {
+            const mapped = idMap.get(val.slice(1));
+            if (mapped) val = `#${mapped}`;
+          }
+          val = val.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g, (m, _q, ref) => {
+            const mapped = idMap.get(ref);
+            return mapped ? `url(#${mapped})` : m;
+          });
+          if (val !== attr.value) {
+            node.setAttributeNS(attr.namespaceURI, attr.name, val);
+          }
+        }
+      }
+    }
+
+    svgEl.setAttribute("width", "15");
+    svgEl.setAttribute("height", "15");
+    const wrapper = document.createElement("span");
+    wrapper.className = "mfi-icon fb-cloned-native-icon";
+    wrapper.appendChild(svgEl);
+    return { kind: "node", template: wrapper };
+  } catch {
+    return null;
+  }
+}
 
 export function invalidateNativeIconCache(): void {
   fallbackCache = null;
@@ -362,11 +459,14 @@ function getFallbackIconCache(fileItems: Record<string, NativeFileItem>): Native
     }
   }
 
+  if (defaultFolderClosed) stickyFolderClosed = defaultFolderClosed;
+  if (defaultFolderOpen) stickyFolderOpen = defaultFolderOpen;
+
   fallbackCache = {
     builtAt: now,
     byExt,
-    defaultFolderClosed,
-    defaultFolderOpen,
+    defaultFolderClosed: defaultFolderClosed || stickyFolderClosed,
+    defaultFolderOpen: defaultFolderOpen || stickyFolderOpen,
     defaultFolderClosedHtml,
     defaultFolderOpenHtml
   };
@@ -408,9 +508,16 @@ export function applyNativeDecoration(
     return;
   }
 
+  // 3) Material Icon Theme이 활성화된 경우 좌측 탐색기 접힘 여부와 무관하게 정확한 열림/닫힘·확장자 아이콘 직접 적용
+  const materialIcon = tryExtractMaterialIcon(app, path, fallbackIcon, isExpandedFolder);
+  if (materialIcon) {
+    renderExtractedIcon(iconContainer, materialIcon);
+    return;
+  }
+
   const cache = fileItems ? getFallbackIconCache(fileItems) : null;
 
-  // 3) 기본 탐색기에서 해당 경로의 커스텀 아이콘 직접 미러링
+  // 4) 기본 탐색기에서 해당 경로의 커스텀 아이콘 직접 미러링 (Iconic, Iconize, CSS 테마 등 범용 대응)
   // -> 일반 폴더 아이콘인 경우 보드의 현재 열림/닫힘 상태(isExpandedFolder)에 맞는 열린/닫힌 폴더 아이콘으로 자동 매칭함.
   if (nativeSelf) {
     const exactIcon = extractIconFromNativeSelf(nativeSelf);
@@ -435,7 +542,7 @@ export function applyNativeDecoration(
     }
   }
 
-  // 4) 기본 탐색기에서 접혀 있어 미렌더링된 항목은 확장자/열림·닫힘 폴더 캐시 아이콘으로 보완
+  // 5) 기본 탐색기에서 접혀 있어 미렌더링된 항목은 확장자/열림·닫힘 폴더 캐시 아이콘으로 보완
   if (cache) {
     let cachedIcon: ExtractedIcon | null = null;
     if (fallbackIcon === "folder") {
@@ -451,8 +558,8 @@ export function applyNativeDecoration(
     }
   }
 
-  // 5) 커스텀 아이콘이 전혀 없는 경우 옵시디언 기본 Lucide 아이콘 표시
-  setIcon(iconContainer, fallbackIcon);
+  // 6) 커스텀 아이콘이 전혀 없는 경우 옵시디언 기본 Lucide 아이콘 표시 (폴더 열림/닫힘 구분)
+  setIcon(iconContainer, fallbackIcon === "folder" && isExpandedFolder ? "folder-open" : fallbackIcon);
 }
 
 // [ID 6.2.2] 옵시디언 네이티브 우클릭 컨텍스트 메뉴 호출 (자동 생성 메뉴 연동)

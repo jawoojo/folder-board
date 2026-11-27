@@ -23,6 +23,9 @@ export interface FolderBoardSettings {
   expandedFlowWindows?: string[];
   flowColumnWidth: number;
   quickLookSplitRatio: number;
+  // [ID 6.1.6] 커맨드 팔레트(Cmd+P) 사용자 지정 검색 별칭 · 카드 모드 세로 확장(1줄) 카드 목록
+  openCommandAlias: string;
+  tallGridCards: string[];
 }
 
 export const DEFAULT_SETTINGS: FolderBoardSettings = {
@@ -35,7 +38,9 @@ export const DEFAULT_SETTINGS: FolderBoardSettings = {
   collapsedFlowSections: [],
   flowWindowSizes: {},
   flowColumnWidth: 270,
-  quickLookSplitRatio: 0.4
+  quickLookSplitRatio: 0.4,
+  openCommandAlias: "폴더 보드 열기",
+  tallGridCards: []
 };
 
 export interface CardTreeItem {

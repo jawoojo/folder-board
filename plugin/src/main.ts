@@ -1,6 +1,6 @@
 // [ID 6.6] Folder Board 옵시디언 플러그인 엔트리포인트
 // -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침·접힘 상태 및 사용자 지정 폴더 순서를 관리함.
-import { Plugin, WorkspaceLeaf } from "obsidian";
+import { Command, Plugin, WorkspaceLeaf } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings } from "./types";
@@ -9,6 +9,9 @@ export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
   private expandedSet = new Set<string>();
   private collapsedFlowSet = new Set<string>();
+  private tallGridCardSet = new Set<string>();
+  private openBoardCmd: Command | null = null;
+  private openBoardHereCmd: Command | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -19,18 +22,18 @@ export default class FolderBoardPlugin extends Plugin {
       void this.activateBoardView();
     });
 
-    this.addCommand({
+    this.openBoardCmd = this.addCommand({
       id: "open-folder-board",
-      name: "Open 2D Folder Board",
+      name: this.buildOpenCommandLabel(false),
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "e" }],
       callback: () => {
         void this.activateBoardView();
       }
     });
 
-    this.addCommand({
+    this.openBoardHereCmd = this.addCommand({
       id: "open-folder-board-here",
-      name: "Open 2D Folder Board in current folder",
+      name: this.buildOpenCommandLabel(true),
       callback: () => {
         const active = this.app.workspace.getActiveFile();
         const folderPath = active?.parent && !active.parent.isRoot() ? active.parent.path : "";
@@ -39,6 +42,28 @@ export default class FolderBoardPlugin extends Plugin {
     });
 
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
+  }
+
+  // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 즉시 반영 (핫키 ID 보존)
+  // -> 한글 등 원하는 검색 문구를 추가해 한영 전환 없이 Cmd+P에서 바로 폴더 보드를 열 수 있게 함.
+  private buildOpenCommandLabel(inCurrentFolder: boolean): string {
+    const alias = (this.settings.openCommandAlias || "").trim();
+    if (!inCurrentFolder) {
+      return alias ? `Open 2D Folder Board · ${alias}` : "Open 2D Folder Board";
+    }
+    return alias
+      ? `Open 2D Folder Board in current folder · ${alias} (현재 폴더)`
+      : "Open 2D Folder Board in current folder";
+  }
+
+  syncCommandNames(): void {
+    const prefix = `${this.manifest.name}: `;
+    if (this.openBoardCmd) {
+      this.openBoardCmd.name = `${prefix}${this.buildOpenCommandLabel(false)}`;
+    }
+    if (this.openBoardHereCmd) {
+      this.openBoardHereCmd.name = `${prefix}${this.buildOpenCommandLabel(true)}`;
+    }
   }
 
   onunload(): void {
@@ -103,13 +128,18 @@ export default class FolderBoardPlugin extends Plugin {
       }
       delete this.settings.expandedFlowWindows;
     }
+    if (typeof this.settings.openCommandAlias !== "string") {
+      this.settings.openCommandAlias = DEFAULT_SETTINGS.openCommandAlias;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
+    this.tallGridCardSet = new Set(this.settings.tallGridCards || []);
   }
 
   async saveSettings(): Promise<void> {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
+    this.settings.tallGridCards = [...this.tallGridCardSet];
     await this.saveData(this.settings);
   }
 
@@ -178,9 +208,23 @@ export default class FolderBoardPlugin extends Plugin {
     return Object.values(this.settings.flowWindowSizes).some((v) => v === "lg" || typeof v === "number");
   }
 
+  // [ID 6.6.10] 카드 모드(그리드·세로) 세로 확장(화면 1줄) 카드 상태 영속 관리
+  isGridCardTall(key: string): boolean {
+    return this.tallGridCardSet.has(key);
+  }
+
+  async toggleGridCardTall(key: string): Promise<boolean> {
+    const next = !this.tallGridCardSet.has(key);
+    if (next) this.tallGridCardSet.add(key);
+    else this.tallGridCardSet.delete(key);
+    await this.saveSettings();
+    return next;
+  }
+
   async resetAllExpandedStates(): Promise<void> {
     this.expandedSet.clear();
     this.collapsedFlowSet.clear();
+    this.tallGridCardSet.clear();
     this.settings.flowWindowSizes = {};
     await this.saveSettings();
   }
@@ -195,6 +239,11 @@ export default class FolderBoardPlugin extends Plugin {
     if (this.collapsedFlowSet.has(oldPath)) {
       this.collapsedFlowSet.delete(oldPath);
       this.collapsedFlowSet.add(newPath);
+      changed = true;
+    }
+    if (this.tallGridCardSet.has(oldPath)) {
+      this.tallGridCardSet.delete(oldPath);
+      this.tallGridCardSet.add(newPath);
       changed = true;
     }
     if (oldPath in this.settings.flowWindowSizes) {

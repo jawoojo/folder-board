@@ -537,12 +537,13 @@ export class FolderBoardView extends ItemView {
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
     this.colResizersEl = this.canvasEl.createDiv({ cls: "fb-col-resizers" });
 
-    // [ID 6.5.19] 창 크기 변경 시 세로 자동 열 수, 여러줄 모드 1열 확장 상한 및 호버 리사이즈 핸들 동기화
+    // [ID 6.5.19] 창 크기 변경 시 세로 자동 열 수, 그리드 1줄 확장 span, 여러줄 모드 1열 확장 상한 및 호버 리사이즈 핸들 동기화
     this.resizeObserver = new ResizeObserver(() => {
       if (this.renderedCards.length === 0) return;
-      if (this.plugin.settings.gridCols === "auto") {
+      const mode = this.plugin.settings.gridCols;
+      if (mode === "auto" || typeof mode === "number") {
         this.applyGridLayoutClasses(this.renderedCards.length);
-      } else if (this.plugin.settings.gridCols === "flow") {
+      } else if (mode === "flow") {
         const nextH = this.canvasEl.clientHeight;
         if (
           Math.abs(nextH - this.lastCanvasHeight) >= 12 &&
@@ -1043,10 +1044,12 @@ export class FolderBoardView extends ItemView {
 
     if (prefLayout === "scroll") {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
+      this.gridEl.style.removeProperty("--fb-tall-span");
       this.gridEl.className = "fb-grid fb-layout-scroll";
     } else if (prefLayout === "flow") {
       const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
       this.gridEl.style.setProperty("--fb-flow-col-width", `${colW}px`);
+      this.gridEl.style.removeProperty("--fb-tall-span");
       this.gridEl.className = cardCount === 0 ? "fb-grid fb-layout-flow is-empty" : "fb-grid fb-layout-flow";
     } else if (prefLayout === "auto") {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
@@ -1054,12 +1057,19 @@ export class FolderBoardView extends ItemView {
       const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
       const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
       const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
+      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
+      const tallSpan = rowClass === "fb-rows-1" ? 1 : Math.max(2, Math.round((availH + 10) / 330));
+      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
       this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
     } else {
       this.gridEl.style.removeProperty("--fb-flow-col-width");
       const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
       const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
       const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
+      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
+      const tallSpan =
+        rowClass === "fb-rows-1" ? 1 : rowClass === "fb-rows-2" ? 2 : Math.max(2, Math.round((availH + 10) / 350));
+      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
       this.gridEl.className = `fb-grid fb-cols-${effectiveCols} ${rowClass}`;
     }
   }
@@ -1366,17 +1376,21 @@ export class FolderBoardView extends ItemView {
     const windowLimit = isResizableFlowCard ? this.getFlowWindowLimit(cardModel) : cardModel.items.length;
     const isScrollableWindow = isResizableFlowCard && cardModel.items.length > windowLimit;
 
+    const cardKey = this.getCardOrderKey(cardModel);
+    const isTallGridCard = !isFlowMode && this.plugin.settings.gridCols !== "scroll" && this.plugin.isGridCardTall(cardKey);
+
     const cardEl = parentEl.createDiv({
       cls:
         "fb-card" +
         (cardModel.isRootCard ? " is-root-card" : "") +
         (cardModel.isRootCard && cardIdx > 0 ? " is-root-moved" : "") +
         (cardModel.isCollapsedSection ? " is-section-collapsed" : "") +
+        (isTallGridCard ? " is-card-tall" : "") +
         (isFocusedCard ? " is-focused-card" : "") +
         (isCarryCard ? " is-carry-target" : ""),
       attr: {
         "data-drop-folder": cardModel.folderPath,
-        "data-order-key": this.getCardOrderKey(cardModel),
+        "data-order-key": cardKey,
         "data-card-index": String(cardIdx),
         ...(isScrollableWindow ? { "data-windowed": "true" } : {})
       }
@@ -1568,6 +1582,29 @@ export class FolderBoardView extends ItemView {
     }
 
     this.renderCardBodyAndFooter(cardEl, cardModel, cardIdx, isCarrying, isFlowMode);
+
+    // [ID 6.5.60] 카드 모드(2/3/4열 그리드 · 세로 모드) 하단 호버 기호 전용 세로 확장/축소 토글 (화면 1줄)
+    // -> DOM 재생성 없이 클래스와 아이콘만 인플레이스 토글해 깜박임 없이 원하는 카드만 화면 1줄 높이로 늘림.
+    if (!isFlowMode && this.plugin.settings.gridCols !== "scroll") {
+      const tallZone = cardEl.createDiv({ cls: "fb-card-tall-zone" });
+      const tallBtn = tallZone.createEl("button", {
+        cls: "fb-card-tall-btn",
+        attr: {
+          type: "button",
+          "aria-label": isTallGridCard ? "기본 크기로 축소" : "화면 1줄 높이로 확장"
+        }
+      });
+      setIcon(tallBtn, isTallGridCard ? "chevrons-up" : "chevrons-down");
+      tallBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nextTall = !this.plugin.isGridCardTall(cardKey);
+        void this.plugin.toggleGridCardTall(cardKey);
+        cardEl.toggleClass("is-card-tall", nextTall);
+        tallBtn.empty();
+        setIcon(tallBtn, nextTall ? "chevrons-up" : "chevrons-down");
+        tallBtn.setAttr("aria-label", nextTall ? "기본 크기로 축소" : "화면 1줄 높이로 확장");
+      });
+    }
   }
 
   // [ID 6.5.54] 카드 본문·하단 리사이즈 바 독립 렌더링 (헤더/→ 화살표 DOM 보존용)
