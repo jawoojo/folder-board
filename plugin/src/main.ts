@@ -1,6 +1,6 @@
 // [ID 6.6] Folder Board 옵시디언 플러그인 엔트리포인트
 // -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침·접힘 상태 및 사용자 지정 폴더 순서를 관리함.
-import { Command, Plugin, WorkspaceLeaf } from "obsidian";
+import { Command, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings } from "./types";
@@ -42,6 +42,43 @@ export default class FolderBoardPlugin extends Plugin {
     });
 
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
+
+    // [ID 6.6.11] 좌측 기본 파일 탐색기 상단 툴바(.nav-buttons-container)에 Folder Board 바로가기 버튼 주입
+    this.app.workspace.onLayoutReady(() => this.injectFileExplorerLaunchButtons());
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => this.injectFileExplorerLaunchButtons())
+    );
+  }
+
+  // [ID 6.6.11] 옵시디언 기본 탐색기 헤더 버튼 주입 및 언로드 정리
+  // -> .nav-buttons-container 맨 뒤에 네이티브 클래스로 1개만 추가해 테마·타 플러그인 버튼과 자연스럽게 어우러짐.
+  private injectFileExplorerLaunchButtons(): void {
+    const leaves = this.app.workspace.getLeavesOfType("file-explorer");
+    for (const leaf of leaves) {
+      const buttonsEl = leaf.view.containerEl.querySelector<HTMLElement>(".nav-header .nav-buttons-container");
+      if (!buttonsEl || buttonsEl.querySelector(".fb-explorer-launch-btn")) continue;
+
+      const btn = buttonsEl.createDiv({
+        cls: "clickable-icon nav-action-button fb-explorer-launch-btn",
+        attr: { "aria-label": "Folder Board 열기 (⌘/Ctrl+클릭: 현재 폴더)" }
+      });
+      setIcon(btn, "layout-grid");
+      btn.addEventListener("click", (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.metaKey || e.ctrlKey) {
+          const active = this.app.workspace.getActiveFile();
+          const folderPath = active?.parent && !active.parent.isRoot() ? active.parent.path : "";
+          void this.activateBoardView(folderPath);
+        } else {
+          void this.activateBoardView();
+        }
+      });
+    }
+  }
+
+  private removeFileExplorerLaunchButtons(): void {
+    document.querySelectorAll(".fb-explorer-launch-btn").forEach((el) => el.remove());
   }
 
   // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 즉시 반영 (핫키 ID 보존)
@@ -67,6 +104,7 @@ export default class FolderBoardPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.removeFileExplorerLaunchButtons();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
   }
 
@@ -83,6 +121,9 @@ export default class FolderBoardPlugin extends Plugin {
         active: true,
         state: { folderPath: folderPath ?? "" }
       });
+      if (this.settings.autoPinTab) {
+        leaf.setPinned(true);
+      }
     }
 
     this.app.workspace.revealLeaf(leaf);
@@ -97,6 +138,15 @@ export default class FolderBoardPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
       if (leaf.view instanceof FolderBoardView) {
         leaf.view.refresh();
+      }
+    }
+  }
+
+  syncOpenBoardPinState(pinned: boolean): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
+      leaf.setPinned(pinned);
+      if (leaf.view instanceof FolderBoardView) {
+        leaf.view.syncPinButtonState();
       }
     }
   }
@@ -130,6 +180,9 @@ export default class FolderBoardPlugin extends Plugin {
     }
     if (typeof this.settings.openCommandAlias !== "string") {
       this.settings.openCommandAlias = DEFAULT_SETTINGS.openCommandAlias;
+    }
+    if (typeof this.settings.autoPinTab !== "boolean") {
+      this.settings.autoPinTab = DEFAULT_SETTINGS.autoPinTab;
     }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);

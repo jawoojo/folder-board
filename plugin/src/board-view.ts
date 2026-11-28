@@ -129,6 +129,7 @@ export class FolderBoardView extends ItemView {
   private sortBtnEl!: HTMLButtonElement;
   private newNoteBtnEl!: HTMLButtonElement;
   private newFolderBtnEl!: HTMLButtonElement;
+  private pinBtnEl!: HTMLButtonElement;
   private qlBtnEl!: HTMLButtonElement;
   private canvasEl!: HTMLElement;
   private gridEl!: HTMLElement;
@@ -224,6 +225,23 @@ export class FolderBoardView extends ItemView {
 
   refresh(): void {
     if (this.shellEl) this.renderAll();
+  }
+
+  private isLeafPinned(): boolean {
+    const pinnedProp = (this.leaf as unknown as { pinned?: boolean }).pinned;
+    return Boolean(pinnedProp ?? this.leaf.getViewState().pinned);
+  }
+
+  syncPinButtonState(): void {
+    if (!this.pinBtnEl) return;
+    const pinned = this.isLeafPinned();
+    this.pinBtnEl.toggleClass("is-active", pinned);
+    this.pinBtnEl.setAttr(
+      "aria-label",
+      pinned
+        ? "탭 고정됨 — 노트 열 때 옆 탭에서 열림 (클릭해 해제)"
+        : "탭 고정 (Pin) — 보드를 유지한 채 옆 탭에서 노트 열기"
+    );
   }
 
   private isInputFocused(): boolean {
@@ -357,6 +375,11 @@ export class FolderBoardView extends ItemView {
     if (!this.findFocusedCardAndIndex().item && this.renderedCards[0]?.items[0]) {
       this.focusCardItem(0, 0);
     }
+
+    if (this.plugin.settings.autoPinTab && !this.isLeafPinned()) {
+      this.leaf.setPinned(true);
+    }
+    this.syncPinButtonState();
 
     this.syncScopeState();
     // 리로드 직후 이미 활성 탭인 경우 active-leaf-change가 안 뜰 수 있으므로 layoutReady 시점에도 한 번 더 동기화
@@ -519,6 +542,20 @@ export class FolderBoardView extends ItemView {
 
     controls.createDiv({ cls: "fb-divider" });
 
+    // [ID 6.5.61] 보드 상단 원클릭 탭 고정(Pin) 토글 -> 설정 탭에 가지 않고 즉시 고정/해제 및 설정 기억
+    this.pinBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": "탭 고정 (Pin)" }
+    });
+    setIcon(this.pinBtnEl, "pin");
+    this.pinBtnEl.addEventListener("click", () => {
+      const nextPinned = !this.isLeafPinned();
+      this.leaf.setPinned(nextPinned);
+      this.plugin.settings.autoPinTab = nextPinned;
+      void this.plugin.saveSettings();
+      this.syncPinButtonState();
+    });
+
     // Quick Edit / Quick Look 토글
     this.qlBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
@@ -648,6 +685,7 @@ export class FolderBoardView extends ItemView {
     this.vaultRefs.push(this.app.workspace.on("active-leaf-change", () => this.syncScopeState()));
     this.vaultRefs.push(
       this.app.workspace.on("layout-change", () => {
+        this.syncPinButtonState();
         if (this.quickLookOpen && !this.isQuickEditLeafAlive()) {
           this.quickLookOpen = false;
           this.quickLookPath = null;
@@ -999,6 +1037,7 @@ export class FolderBoardView extends ItemView {
     this.sortBtnEl.setAttr("aria-label", s.sortBy === "name" ? "정렬: 이름순" : "정렬: 최근 수정순");
 
     this.updateActionTooltipsOnly();
+    this.syncPinButtonState();
     this.qlBtnEl.toggleClass("is-active", this.quickLookOpen);
   }
 
@@ -2310,12 +2349,22 @@ export class FolderBoardView extends ItemView {
     this.focusCardItem(cardIdx, itemIdx, { clearSelection: true, updatePreview: true });
   }
 
-  // [ID 6.5.8] 동일 탭 노트 열기 + 뒤로가기 히스토리 보존
-  // -> navigation = true인 현재 leaf에서 바로 openFile을 호출해야 옵시디언 기본 뒤로가기(Cmd+Opt+Left)로 Folder Board로 복귀됨.
+  // [ID 6.5.8] 노트 열기 (핀 고정 시 옵시디언 표준 getLeaf(false)로 옆 비고정 탭 재사용 / 미고정 시 동일 탭 히스토리 보존)
+  // -> 탭이 고정(Pinned)된 상태에서는 보드를 덮어쓰지 않고 옆 작업 탭에서 열어 탭 폭증을 막으면서 보드를 상시 유지함.
   private async openFile(file: TFile, forceNewTab = false): Promise<void> {
     if (forceNewTab || this.plugin.settings.openBehavior === "new-tab") {
       const newLeaf = this.app.workspace.getLeaf("tab");
       await newLeaf.openFile(file, { active: true });
+      return;
+    }
+
+    if (this.isLeafPinned()) {
+      const unpinned = this.app.workspace.getLeaf(false);
+      const targetLeaf =
+        unpinned && unpinned !== this.leaf && unpinned !== this.quickEditLeaf
+          ? unpinned
+          : this.app.workspace.getLeaf("tab");
+      await targetLeaf.openFile(file, { active: true });
       return;
     }
 

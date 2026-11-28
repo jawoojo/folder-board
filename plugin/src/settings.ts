@@ -79,6 +79,20 @@ export class FolderBoardSettingTab extends PluginSettingTab {
           })
       );
 
+    // [ID 6.4.3] 폴더 보드 탭 자동 고정(Pin) 토글 -> 보드 상단 핀 버튼과 양방향 동기화
+    new Setting(containerEl)
+      .setName("폴더 보드 탭 자동 고정 (Pin)")
+      .setDesc(
+        "폴더 보드 탭을 고정해 두어 탐색기나 보드에서 노트를 열어도 보드가 사라지지 않고 옆 탭에서 열리게 합니다. (보드 상단 핀 버튼으로도 즉시 토글 가능)"
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.autoPinTab).onChange(async (value) => {
+          this.plugin.settings.autoPinTab = value;
+          await this.plugin.saveSettings();
+          this.plugin.syncOpenBoardPinState(value);
+        })
+      );
+
     new Setting(containerEl)
       .setName("카드 상하 끝에서 ↑/↓ 동작")
       .setDesc("적응형: 가로 모드는 카드 내부 순환, 2D 그리드·세로·여러줄 모드는 위/아래 섹션으로 연결")

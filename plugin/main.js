@@ -780,6 +780,19 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
   refresh() {
     if (this.shellEl) this.renderAll();
   }
+  isLeafPinned() {
+    const pinnedProp = this.leaf.pinned;
+    return Boolean(pinnedProp ?? this.leaf.getViewState().pinned);
+  }
+  syncPinButtonState() {
+    if (!this.pinBtnEl) return;
+    const pinned = this.isLeafPinned();
+    this.pinBtnEl.toggleClass("is-active", pinned);
+    this.pinBtnEl.setAttr(
+      "aria-label",
+      pinned ? "\uD0ED \uACE0\uC815\uB428 \u2014 \uB178\uD2B8 \uC5F4 \uB54C \uC606 \uD0ED\uC5D0\uC11C \uC5F4\uB9BC (\uD074\uB9AD\uD574 \uD574\uC81C)" : "\uD0ED \uACE0\uC815 (Pin) \u2014 \uBCF4\uB4DC\uB97C \uC720\uC9C0\uD55C \uCC44 \uC606 \uD0ED\uC5D0\uC11C \uB178\uD2B8 \uC5F4\uAE30"
+    );
+  }
   isInputFocused() {
     return Boolean(
       document.activeElement instanceof HTMLElement && document.activeElement.closest("input, textarea, select")
@@ -883,6 +896,10 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     if (!this.findFocusedCardAndIndex().item && this.renderedCards[0]?.items[0]) {
       this.focusCardItem(0, 0);
     }
+    if (this.plugin.settings.autoPinTab && !this.isLeafPinned()) {
+      this.leaf.setPinned(true);
+    }
+    this.syncPinButtonState();
     this.syncScopeState();
     this.app.workspace.onLayoutReady(() => this.syncScopeState());
     requestAnimationFrame(() => {
@@ -1020,6 +1037,18 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     (0, import_obsidian4.setIcon)(this.newFolderBtnEl, "folder-plus");
     this.newFolderBtnEl.addEventListener("click", () => this.promptCreateFolder());
     controls.createDiv({ cls: "fb-divider" });
+    this.pinBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": "\uD0ED \uACE0\uC815 (Pin)" }
+    });
+    (0, import_obsidian4.setIcon)(this.pinBtnEl, "pin");
+    this.pinBtnEl.addEventListener("click", () => {
+      const nextPinned = !this.isLeafPinned();
+      this.leaf.setPinned(nextPinned);
+      this.plugin.settings.autoPinTab = nextPinned;
+      void this.plugin.saveSettings();
+      this.syncPinButtonState();
+    });
     this.qlBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
       attr: { "aria-label": "\uBE60\uB978 \uD3B8\uC9D1 (Space)" }
@@ -1126,6 +1155,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     this.vaultRefs.push(this.app.workspace.on("active-leaf-change", () => this.syncScopeState()));
     this.vaultRefs.push(
       this.app.workspace.on("layout-change", () => {
+        this.syncPinButtonState();
         if (this.quickLookOpen && !this.isQuickEditLeafAlive()) {
           this.quickLookOpen = false;
           this.quickLookPath = null;
@@ -1420,6 +1450,7 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     }
     this.sortBtnEl.setAttr("aria-label", s.sortBy === "name" ? "\uC815\uB82C: \uC774\uB984\uC21C" : "\uC815\uB82C: \uCD5C\uADFC \uC218\uC815\uC21C");
     this.updateActionTooltipsOnly();
+    this.syncPinButtonState();
     this.qlBtnEl.toggleClass("is-active", this.quickLookOpen);
   }
   renderBreadcrumb() {
@@ -2499,12 +2530,18 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian4.ItemView {
     }
     this.focusCardItem(cardIdx, itemIdx, { clearSelection: true, updatePreview: true });
   }
-  // [ID 6.5.8] 동일 탭 노트 열기 + 뒤로가기 히스토리 보존
-  // -> navigation = true인 현재 leaf에서 바로 openFile을 호출해야 옵시디언 기본 뒤로가기(Cmd+Opt+Left)로 Folder Board로 복귀됨.
+  // [ID 6.5.8] 노트 열기 (핀 고정 시 옵시디언 표준 getLeaf(false)로 옆 비고정 탭 재사용 / 미고정 시 동일 탭 히스토리 보존)
+  // -> 탭이 고정(Pinned)된 상태에서는 보드를 덮어쓰지 않고 옆 작업 탭에서 열어 탭 폭증을 막으면서 보드를 상시 유지함.
   async openFile(file, forceNewTab = false) {
     if (forceNewTab || this.plugin.settings.openBehavior === "new-tab") {
       const newLeaf = this.app.workspace.getLeaf("tab");
       await newLeaf.openFile(file, { active: true });
+      return;
+    }
+    if (this.isLeafPinned()) {
+      const unpinned = this.app.workspace.getLeaf(false);
+      const targetLeaf = unpinned && unpinned !== this.leaf && unpinned !== this.quickEditLeaf ? unpinned : this.app.workspace.getLeaf("tab");
+      await targetLeaf.openFile(file, { active: true });
       return;
     }
     await this.leaf.openFile(file, { active: true });
@@ -4223,6 +4260,15 @@ var FolderBoardSettingTab = class extends import_obsidian5.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian5.Setting(containerEl).setName("\uD3F4\uB354 \uBCF4\uB4DC \uD0ED \uC790\uB3D9 \uACE0\uC815 (Pin)").setDesc(
+      "\uD3F4\uB354 \uBCF4\uB4DC \uD0ED\uC744 \uACE0\uC815\uD574 \uB450\uC5B4 \uD0D0\uC0C9\uAE30\uB098 \uBCF4\uB4DC\uC5D0\uC11C \uB178\uD2B8\uB97C \uC5F4\uC5B4\uB3C4 \uBCF4\uB4DC\uAC00 \uC0AC\uB77C\uC9C0\uC9C0 \uC54A\uACE0 \uC606 \uD0ED\uC5D0\uC11C \uC5F4\uB9AC\uAC8C \uD569\uB2C8\uB2E4. (\uBCF4\uB4DC \uC0C1\uB2E8 \uD540 \uBC84\uD2BC\uC73C\uB85C\uB3C4 \uC989\uC2DC \uD1A0\uAE00 \uAC00\uB2A5)"
+    ).addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoPinTab).onChange(async (value) => {
+        this.plugin.settings.autoPinTab = value;
+        await this.plugin.saveSettings();
+        this.plugin.syncOpenBoardPinState(value);
+      })
+    );
     new import_obsidian5.Setting(containerEl).setName("\uCE74\uB4DC \uC0C1\uD558 \uB05D\uC5D0\uC11C \u2191/\u2193 \uB3D9\uC791").setDesc("\uC801\uC751\uD615: \uAC00\uB85C \uBAA8\uB4DC\uB294 \uCE74\uB4DC \uB0B4\uBD80 \uC21C\uD658, 2D \uADF8\uB9AC\uB4DC\xB7\uC138\uB85C\xB7\uC5EC\uB7EC\uC904 \uBAA8\uB4DC\uB294 \uC704/\uC544\uB798 \uC139\uC158\uC73C\uB85C \uC5F0\uACB0").addDropdown(
       (dd) => dd.addOption("adaptive", "\uBAA8\uB4DC \uC801\uC751\uD615 (\uCD94\uCC9C)").addOption("loop", "\uD56D\uC0C1 \uCE74\uB4DC \uB0B4\uBD80 \uC21C\uD658").setValue(this.plugin.settings.verticalEdgeBehavior).onChange(async (value) => {
         this.plugin.settings.verticalEdgeBehavior = value;
@@ -4261,7 +4307,8 @@ var DEFAULT_SETTINGS = {
   flowColumnWidth: 270,
   quickLookSplitRatio: 0.4,
   openCommandAlias: "\uD3F4\uB354 \uBCF4\uB4DC \uC5F4\uAE30",
-  tallGridCards: []
+  tallGridCards: [],
+  autoPinTab: true
 };
 
 // src/main.ts
@@ -4299,6 +4346,38 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
       }
     });
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
+    this.app.workspace.onLayoutReady(() => this.injectFileExplorerLaunchButtons());
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => this.injectFileExplorerLaunchButtons())
+    );
+  }
+  // [ID 6.6.11] 옵시디언 기본 탐색기 헤더 버튼 주입 및 언로드 정리
+  // -> .nav-buttons-container 맨 뒤에 네이티브 클래스로 1개만 추가해 테마·타 플러그인 버튼과 자연스럽게 어우러짐.
+  injectFileExplorerLaunchButtons() {
+    const leaves = this.app.workspace.getLeavesOfType("file-explorer");
+    for (const leaf of leaves) {
+      const buttonsEl = leaf.view.containerEl.querySelector(".nav-header .nav-buttons-container");
+      if (!buttonsEl || buttonsEl.querySelector(".fb-explorer-launch-btn")) continue;
+      const btn = buttonsEl.createDiv({
+        cls: "clickable-icon nav-action-button fb-explorer-launch-btn",
+        attr: { "aria-label": "Folder Board \uC5F4\uAE30 (\u2318/Ctrl+\uD074\uB9AD: \uD604\uC7AC \uD3F4\uB354)" }
+      });
+      (0, import_obsidian6.setIcon)(btn, "layout-grid");
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.metaKey || e.ctrlKey) {
+          const active = this.app.workspace.getActiveFile();
+          const folderPath = active?.parent && !active.parent.isRoot() ? active.parent.path : "";
+          void this.activateBoardView(folderPath);
+        } else {
+          void this.activateBoardView();
+        }
+      });
+    }
+  }
+  removeFileExplorerLaunchButtons() {
+    document.querySelectorAll(".fb-explorer-launch-btn").forEach((el) => el.remove());
   }
   // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 즉시 반영 (핫키 ID 보존)
   // -> 한글 등 원하는 검색 문구를 추가해 한영 전환 없이 Cmd+P에서 바로 폴더 보드를 열 수 있게 함.
@@ -4319,6 +4398,7 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     }
   }
   onunload() {
+    this.removeFileExplorerLaunchButtons();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
   }
   async activateBoardView(folderPath) {
@@ -4333,6 +4413,9 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
         active: true,
         state: { folderPath: folderPath ?? "" }
       });
+      if (this.settings.autoPinTab) {
+        leaf.setPinned(true);
+      }
     }
     this.app.workspace.revealLeaf(leaf);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
@@ -4344,6 +4427,14 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
       if (leaf.view instanceof FolderBoardView) {
         leaf.view.refresh();
+      }
+    }
+  }
+  syncOpenBoardPinState(pinned) {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
+      leaf.setPinned(pinned);
+      if (leaf.view instanceof FolderBoardView) {
+        leaf.view.syncPinButtonState();
       }
     }
   }
@@ -4372,6 +4463,9 @@ var FolderBoardPlugin = class extends import_obsidian6.Plugin {
     }
     if (typeof this.settings.openCommandAlias !== "string") {
       this.settings.openCommandAlias = DEFAULT_SETTINGS.openCommandAlias;
+    }
+    if (typeof this.settings.autoPinTab !== "boolean") {
+      this.settings.autoPinTab = DEFAULT_SETTINGS.autoPinTab;
     }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
