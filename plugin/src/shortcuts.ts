@@ -26,6 +26,7 @@ export function getShortcutGroups(): ShortcutGroup[] {
         { keys: ["⌘/Ctrl", "Enter"], desc: tr("새 탭에서 노트 열기", "Open note in new tab") },
         { keys: ["Backspace"], desc: tr("상위 폴더로 이동", "Go to parent folder") },
         { keys: ["⌘/Ctrl", "F"], desc: tr("보드 내 검색 (또는 /)", "Search in board (or /)") },
+        { keys: ["B"], desc: tr("북마크 메뉴 열기", "Open bookmarks menu") },
         { keys: ["?"], desc: tr("단축키 도움말 열기 · 닫기", "Toggle keyboard shortcuts") }
       ]
     },

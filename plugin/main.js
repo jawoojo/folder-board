@@ -107,6 +107,12 @@ var i18n = {
     "Pin tab \u2014 keep Folder Board open and open notes beside it"
   ),
   quickEditAria: () => tr("\uBE60\uB978 \uD3B8\uC9D1 (Space)", "Quick Edit (Space)"),
+  vaultSwitcherAria: () => tr("\uBCFC\uD2B8 \uC804\uD658 (\uB2E4\uB978 \uBCFC\uD2B8 \uC5F4\uAE30)", "Switch vault"),
+  bookmarksAria: () => tr("\uBD81\uB9C8\uD06C (B)", "Bookmarks (B)"),
+  bookmarksEmpty: () => tr("\uC800\uC7A5\uB41C \uBD81\uB9C8\uD06C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4", "No bookmarks yet"),
+  bookmarksDisabled: () => tr("\uBD81\uB9C8\uD06C \uCF54\uC5B4 \uD50C\uB7EC\uADF8\uC778\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4", "Bookmarks core plugin is disabled"),
+  openBookmarksPane: () => tr("\uBD81\uB9C8\uD06C \uD328\uB110 \uC5F4\uAE30", "Open Bookmarks pane"),
+  settingsAria: () => tr("\uC635\uC2DC\uB514\uC5B8 \uC124\uC815 (\u2318/Ctrl+\uD074\uB9AD: Folder Board \uC124\uC815)", "Obsidian Settings (\u2318/Ctrl+click: Folder Board settings)"),
   clearShelfAria: () => tr("\uBC14\uAD6C\uB2C8 \uBE44\uC6B0\uAE30", "Clear shelf"),
   clearSelectionAria: () => tr("\uC120\uD0DD \uD574\uC81C", "Clear selection"),
   // Folder sort menu
@@ -304,6 +310,7 @@ function getShortcutGroups() {
         { keys: ["\u2318/Ctrl", "Enter"], desc: tr("\uC0C8 \uD0ED\uC5D0\uC11C \uB178\uD2B8 \uC5F4\uAE30", "Open note in new tab") },
         { keys: ["Backspace"], desc: tr("\uC0C1\uC704 \uD3F4\uB354\uB85C \uC774\uB3D9", "Go to parent folder") },
         { keys: ["\u2318/Ctrl", "F"], desc: tr("\uBCF4\uB4DC \uB0B4 \uAC80\uC0C9 (\uB610\uB294 /)", "Search in board (or /)") },
+        { keys: ["B"], desc: tr("\uBD81\uB9C8\uD06C \uBA54\uB274 \uC5F4\uAE30", "Open bookmarks menu") },
         { keys: ["?"], desc: tr("\uB2E8\uCD95\uD0A4 \uB3C4\uC6C0\uB9D0 \uC5F4\uAE30 \xB7 \uB2EB\uAE30", "Toggle keyboard shortcuts") }
       ]
     },
@@ -1053,11 +1060,14 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian5.ItemView {
     }
     this.folderSortBtnEl?.setAttr("aria-label", i18n.folderSortAria());
     this.qlBtnEl?.setAttr("aria-label", i18n.quickEditAria());
+    this.bookmarkBtnEl?.setAttr("aria-label", i18n.bookmarksAria());
+    this.settingsBtnEl?.setAttr("aria-label", i18n.settingsAria());
     if (this.shelfDropHereBtn) this.shelfDropHereBtn.setText(i18n.move());
     this.shelfEl?.querySelector(".fb-shelf-actions .fb-tool-btn")?.setAttr("aria-label", i18n.clearShelfAria());
     const selShelf = this.selectionBarEl?.querySelector(".fb-selection-btn");
     if (selShelf) selShelf.setText(i18n.shelf());
     this.selectionBarEl?.querySelector(".fb-tool-btn")?.setAttr("aria-label", i18n.clearSelectionAria());
+    this.renderBreadcrumb();
     this.updateToolbarStates();
     this.renderShelf();
     this.renderSelectionBar();
@@ -1359,6 +1369,27 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian5.ItemView {
       this.quickLookOpen = !this.quickLookOpen;
       void this.updateQuickLook();
       this.updateToolbarStates();
+    });
+    controls.createDiv({ cls: "fb-divider" });
+    this.bookmarkBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": i18n.bookmarksAria() }
+    });
+    (0, import_obsidian5.setIcon)(this.bookmarkBtnEl, "bookmark");
+    this.bookmarkBtnEl.addEventListener("click", () => {
+      this.openBookmarksMenu(this.bookmarkBtnEl);
+    });
+    this.settingsBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": i18n.settingsAria() }
+    });
+    (0, import_obsidian5.setIcon)(this.settingsBtnEl, "settings");
+    this.settingsBtnEl.addEventListener("click", (e) => {
+      this.openObsidianSettings(e.metaKey || e.ctrlKey);
+    });
+    this.settingsBtnEl.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      this.openObsidianSettings(true);
     });
     const body = this.shellEl.createDiv({ cls: "fb-body" });
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
@@ -1795,6 +1826,21 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian5.ItemView {
         (0, import_obsidian5.setIcon)(sep, "chevron-right");
       }
       const isLast = idx === segments.length - 1;
+      const isVaultRoot = idx === 0;
+      if (isVaultRoot && isLast) {
+        const btn2 = this.breadcrumbEl.createEl("button", {
+          cls: "clickable-icon fb-crumb-btn is-current is-vault-root",
+          attr: {
+            "data-drop-folder": seg.path,
+            "aria-label": i18n.vaultSwitcherAria()
+          }
+        });
+        btn2.createSpan({ text: seg.name });
+        const caret = btn2.createSpan({ cls: "fb-vault-caret" });
+        (0, import_obsidian5.setIcon)(caret, "chevron-down");
+        btn2.addEventListener("click", () => this.openVaultSwitcher());
+        return;
+      }
       const btn = this.breadcrumbEl.createEl("button", {
         cls: "clickable-icon fb-crumb-btn" + (isLast ? " is-current" : ""),
         text: seg.name,
@@ -1803,7 +1849,121 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian5.ItemView {
       if (!isLast) {
         btn.addEventListener("click", () => this.navigateToFolder(seg.path));
       }
+      if (isVaultRoot && !isLast) {
+        const caretBtn = this.breadcrumbEl.createEl("button", {
+          cls: "clickable-icon fb-vault-caret-btn",
+          attr: { "aria-label": i18n.vaultSwitcherAria() }
+        });
+        (0, import_obsidian5.setIcon)(caretBtn, "chevron-down");
+        caretBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.openVaultSwitcher();
+        });
+      }
     });
+  }
+  // [ID 6.5.72] 네이티브 볼트 전환기 · 옵시디언 설정 · 코어 북마크 드롭다운 실행기
+  executeObsidianCommand(commandId) {
+    const cmds = this.app.commands;
+    return Boolean(cmds?.executeCommandById?.(commandId));
+  }
+  openVaultSwitcher() {
+    this.executeObsidianCommand("app:open-vault");
+  }
+  openObsidianSettings(openPluginTab = false) {
+    const settingApi = this.app.setting;
+    if (settingApi?.open) {
+      settingApi.open();
+      if (openPluginTab && settingApi.openTabById) {
+        settingApi.openTabById(this.plugin.manifest.id);
+      }
+      return;
+    }
+    this.executeObsidianCommand("app:open-settings");
+  }
+  openBookmarksMenu(anchorEl) {
+    const bookmarksPlugin = this.app.internalPlugins?.plugins?.bookmarks;
+    const menu = new import_obsidian5.Menu();
+    const enabled = Boolean(bookmarksPlugin?.enabled);
+    const instance = bookmarksPlugin?.instance;
+    const rawItems = enabled && Array.isArray(instance?.items) ? instance.items : [];
+    let addedCount = 0;
+    const appendItems = (items, depth) => {
+      const indent = depth > 0 ? "\u3000".repeat(Math.min(depth, 3)) : "";
+      for (const bm of items) {
+        if (bm.type === "group") {
+          const groupTitle = bm.title || "Group";
+          menu.addItem(
+            (mi) => mi.setTitle(`${indent}\u25B8 ${groupTitle}`).setIcon("bookmark").setDisabled(true)
+          );
+          if (Array.isArray(bm.items) && bm.items.length > 0) {
+            appendItems(bm.items, depth + 1);
+          }
+          continue;
+        }
+        if (bm.type === "folder" && bm.path) {
+          const folderPath = normalizeFolderStr(bm.path);
+          const fallbackName = folderPath.split("/").pop() || this.app.vault.getName();
+          const label = bm.title || fallbackName;
+          addedCount++;
+          menu.addItem(
+            (mi) => mi.setTitle(`${indent}${label}`).setIcon("folder").onClick(() => {
+              this.navigateToFolder(folderPath);
+            })
+          );
+          continue;
+        }
+        if (bm.type === "file" && bm.path) {
+          const filePath = bm.path;
+          const file = getFileByPath(this.app, filePath);
+          const fallbackName = file ? file.extension === "md" ? file.basename : file.name : filePath.split("/").pop() || filePath;
+          const label = bm.title || (bm.subpath ? `${fallbackName}${bm.subpath}` : fallbackName);
+          addedCount++;
+          menu.addItem(
+            (mi) => mi.setTitle(`${indent}${label}`).setIcon("file-text").onClick(() => {
+              if (bm.subpath && instance?.openBookmark) {
+                instance.openBookmark(bm, false);
+              } else if (file) {
+                void this.openFile(file, false);
+              } else if (instance?.openBookmark) {
+                instance.openBookmark(bm, false);
+              }
+            })
+          );
+          continue;
+        }
+        if (bm.type === "search" || bm.type === "graph" || bm.type === "url") {
+          const label = bm.title || bm.query || bm.url || bm.type;
+          const icon = bm.type === "search" ? "search" : bm.type === "graph" ? "git-fork" : "globe";
+          addedCount++;
+          menu.addItem(
+            (mi) => mi.setTitle(`${indent}${label}`).setIcon(icon).onClick(() => {
+              instance?.openBookmark?.(bm, false);
+            })
+          );
+        }
+      }
+    };
+    if (!enabled) {
+      menu.addItem((mi) => mi.setTitle(i18n.bookmarksDisabled()).setDisabled(true));
+    } else if (rawItems.length === 0) {
+      menu.addItem((mi) => mi.setTitle(i18n.bookmarksEmpty()).setDisabled(true));
+    } else {
+      appendItems(rawItems, 0);
+      if (addedCount === 0) {
+        menu.addItem((mi) => mi.setTitle(i18n.bookmarksEmpty()).setDisabled(true));
+      }
+    }
+    if (enabled) {
+      menu.addSeparator();
+      menu.addItem(
+        (mi) => mi.setTitle(i18n.openBookmarksPane()).setIcon("bookmark").onClick(() => {
+          this.executeObsidianCommand("bookmarks:open");
+        })
+      );
+    }
+    const rect = anchorEl.getBoundingClientRect();
+    menu.showAtPosition({ x: Math.round(rect.left), y: Math.round(rect.bottom + 4) });
   }
   clampFlowColWidth(width) {
     return Math.max(FLOW_COL_MIN_WIDTH, Math.min(Math.round(width), FLOW_COL_MAX_WIDTH));
@@ -4834,6 +4994,12 @@ var FolderBoardView = class _FolderBoardView extends import_obsidian5.ItemView {
       e.stopPropagation();
       if (e.shiftKey) this.promptCreateFolder();
       else this.promptCreateNote();
+      return;
+    }
+    if (!meta && !e.shiftKey && !e.altKey && code === "KeyB") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openBookmarksMenu(this.bookmarkBtnEl);
       return;
     }
     if (this.renderedCards.length === 0) return;

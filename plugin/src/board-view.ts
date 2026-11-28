@@ -147,6 +147,8 @@ export class FolderBoardView extends ItemView {
   private sidebarAutoCollapseBtnEl!: HTMLButtonElement;
   private pinBtnEl!: HTMLButtonElement;
   private qlBtnEl!: HTMLButtonElement;
+  private bookmarkBtnEl!: HTMLButtonElement;
+  private settingsBtnEl!: HTMLButtonElement;
   private canvasEl!: HTMLElement;
   private gridEl!: HTMLElement;
   private colResizersEl!: HTMLElement;
@@ -292,11 +294,14 @@ export class FolderBoardView extends ItemView {
     }
     this.folderSortBtnEl?.setAttr("aria-label", i18n.folderSortAria());
     this.qlBtnEl?.setAttr("aria-label", i18n.quickEditAria());
+    this.bookmarkBtnEl?.setAttr("aria-label", i18n.bookmarksAria());
+    this.settingsBtnEl?.setAttr("aria-label", i18n.settingsAria());
     if (this.shelfDropHereBtn) this.shelfDropHereBtn.setText(i18n.move());
     this.shelfEl?.querySelector<HTMLElement>(".fb-shelf-actions .fb-tool-btn")?.setAttr("aria-label", i18n.clearShelfAria());
     const selShelf = this.selectionBarEl?.querySelector<HTMLElement>(".fb-selection-btn");
     if (selShelf) selShelf.setText(i18n.shelf());
     this.selectionBarEl?.querySelector<HTMLElement>(".fb-tool-btn")?.setAttr("aria-label", i18n.clearSelectionAria());
+    this.renderBreadcrumb();
     this.updateToolbarStates();
     this.renderShelf();
     this.renderSelectionBar();
@@ -660,6 +665,31 @@ export class FolderBoardView extends ItemView {
       this.quickLookOpen = !this.quickLookOpen;
       void this.updateQuickLook();
       this.updateToolbarStates();
+    });
+
+    controls.createDiv({ cls: "fb-divider" });
+
+    // [ID 6.5.72] 좌측 패널 접힘 상태에서도 탐색기를 열지 않고 바로 쓰는 북마크 드롭다운 · 옵시디언 설정 버튼
+    this.bookmarkBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": i18n.bookmarksAria() }
+    });
+    setIcon(this.bookmarkBtnEl, "bookmark");
+    this.bookmarkBtnEl.addEventListener("click", () => {
+      this.openBookmarksMenu(this.bookmarkBtnEl);
+    });
+
+    this.settingsBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": i18n.settingsAria() }
+    });
+    setIcon(this.settingsBtnEl, "settings");
+    this.settingsBtnEl.addEventListener("click", (e: MouseEvent) => {
+      this.openObsidianSettings(e.metaKey || e.ctrlKey);
+    });
+    this.settingsBtnEl.addEventListener("contextmenu", (e: MouseEvent) => {
+      e.preventDefault();
+      this.openObsidianSettings(true);
     });
 
     // 메인 바디
@@ -1181,6 +1211,24 @@ export class FolderBoardView extends ItemView {
         setIcon(sep, "chevron-right");
       }
       const isLast = idx === segments.length - 1;
+      const isVaultRoot = idx === 0;
+
+      // [ID 6.5.72] 볼트 이름에 네이티브 볼트 전환기 통합 -> 루트에서는 볼트명 클릭, 하위 폴더에서는 우측 ⌄ 클릭으로 즉시 볼트 전환
+      if (isVaultRoot && isLast) {
+        const btn = this.breadcrumbEl.createEl("button", {
+          cls: "clickable-icon fb-crumb-btn is-current is-vault-root",
+          attr: {
+            "data-drop-folder": seg.path,
+            "aria-label": i18n.vaultSwitcherAria()
+          }
+        });
+        btn.createSpan({ text: seg.name });
+        const caret = btn.createSpan({ cls: "fb-vault-caret" });
+        setIcon(caret, "chevron-down");
+        btn.addEventListener("click", () => this.openVaultSwitcher());
+        return;
+      }
+
       const btn = this.breadcrumbEl.createEl("button", {
         cls: "clickable-icon fb-crumb-btn" + (isLast ? " is-current" : ""),
         text: seg.name,
@@ -1189,7 +1237,183 @@ export class FolderBoardView extends ItemView {
       if (!isLast) {
         btn.addEventListener("click", () => this.navigateToFolder(seg.path));
       }
+
+      if (isVaultRoot && !isLast) {
+        const caretBtn = this.breadcrumbEl.createEl("button", {
+          cls: "clickable-icon fb-vault-caret-btn",
+          attr: { "aria-label": i18n.vaultSwitcherAria() }
+        });
+        setIcon(caretBtn, "chevron-down");
+        caretBtn.addEventListener("click", (e: MouseEvent) => {
+          e.stopPropagation();
+          this.openVaultSwitcher();
+        });
+      }
     });
+  }
+
+  // [ID 6.5.72] 네이티브 볼트 전환기 · 옵시디언 설정 · 코어 북마크 드롭다운 실행기
+  private executeObsidianCommand(commandId: string): boolean {
+    const cmds = (
+      this.app as unknown as {
+        commands?: { executeCommandById?: (id: string) => boolean };
+      }
+    ).commands;
+    return Boolean(cmds?.executeCommandById?.(commandId));
+  }
+
+  private openVaultSwitcher(): void {
+    this.executeObsidianCommand("app:open-vault");
+  }
+
+  private openObsidianSettings(openPluginTab = false): void {
+    const settingApi = (
+      this.app as unknown as {
+        setting?: { open?: () => void; openTabById?: (id: string) => void };
+      }
+    ).setting;
+    if (settingApi?.open) {
+      settingApi.open();
+      if (openPluginTab && settingApi.openTabById) {
+        settingApi.openTabById(this.plugin.manifest.id);
+      }
+      return;
+    }
+    this.executeObsidianCommand("app:open-settings");
+  }
+
+  private openBookmarksMenu(anchorEl: HTMLElement): void {
+    interface ObsidianBookmarkItem {
+      type?: string;
+      title?: string;
+      path?: string;
+      subpath?: string;
+      query?: string;
+      url?: string;
+      items?: ObsidianBookmarkItem[];
+    }
+    interface BookmarksPluginLike {
+      enabled?: boolean;
+      instance?: {
+        items?: ObsidianBookmarkItem[];
+        openBookmark?: (item: ObsidianBookmarkItem, newLeaf?: boolean) => void;
+      };
+    }
+
+    const bookmarksPlugin = (
+      this.app as unknown as {
+        internalPlugins?: { plugins?: { bookmarks?: BookmarksPluginLike } };
+      }
+    ).internalPlugins?.plugins?.bookmarks;
+
+    const menu = new Menu();
+    const enabled = Boolean(bookmarksPlugin?.enabled);
+    const instance = bookmarksPlugin?.instance;
+    const rawItems = enabled && Array.isArray(instance?.items) ? instance!.items! : [];
+
+    let addedCount = 0;
+
+    const appendItems = (items: ObsidianBookmarkItem[], depth: number) => {
+      const indent = depth > 0 ? "　".repeat(Math.min(depth, 3)) : "";
+      for (const bm of items) {
+        if (bm.type === "group") {
+          const groupTitle = bm.title || "Group";
+          menu.addItem((mi) =>
+            mi
+              .setTitle(`${indent}▸ ${groupTitle}`)
+              .setIcon("bookmark")
+              .setDisabled(true)
+          );
+          if (Array.isArray(bm.items) && bm.items.length > 0) {
+            appendItems(bm.items, depth + 1);
+          }
+          continue;
+        }
+
+        if (bm.type === "folder" && bm.path) {
+          const folderPath = normalizeFolderStr(bm.path);
+          const fallbackName = folderPath.split("/").pop() || this.app.vault.getName();
+          const label = bm.title || fallbackName;
+          addedCount++;
+          menu.addItem((mi) =>
+            mi
+              .setTitle(`${indent}${label}`)
+              .setIcon("folder")
+              .onClick(() => {
+                this.navigateToFolder(folderPath);
+              })
+          );
+          continue;
+        }
+
+        if (bm.type === "file" && bm.path) {
+          const filePath = bm.path;
+          const file = getFileByPath(this.app, filePath);
+          const fallbackName = file
+            ? file.extension === "md"
+              ? file.basename
+              : file.name
+            : filePath.split("/").pop() || filePath;
+          const label = bm.title || (bm.subpath ? `${fallbackName}${bm.subpath}` : fallbackName);
+          addedCount++;
+          menu.addItem((mi) =>
+            mi
+              .setTitle(`${indent}${label}`)
+              .setIcon("file-text")
+              .onClick(() => {
+                if (bm.subpath && instance?.openBookmark) {
+                  instance.openBookmark(bm, false);
+                } else if (file) {
+                  void this.openFile(file, false);
+                } else if (instance?.openBookmark) {
+                  instance.openBookmark(bm, false);
+                }
+              })
+          );
+          continue;
+        }
+
+        if (bm.type === "search" || bm.type === "graph" || bm.type === "url") {
+          const label = bm.title || bm.query || bm.url || bm.type;
+          const icon = bm.type === "search" ? "search" : bm.type === "graph" ? "git-fork" : "globe";
+          addedCount++;
+          menu.addItem((mi) =>
+            mi
+              .setTitle(`${indent}${label}`)
+              .setIcon(icon)
+              .onClick(() => {
+                instance?.openBookmark?.(bm, false);
+              })
+          );
+        }
+      }
+    };
+
+    if (!enabled) {
+      menu.addItem((mi) => mi.setTitle(i18n.bookmarksDisabled()).setDisabled(true));
+    } else if (rawItems.length === 0) {
+      menu.addItem((mi) => mi.setTitle(i18n.bookmarksEmpty()).setDisabled(true));
+    } else {
+      appendItems(rawItems, 0);
+      if (addedCount === 0) {
+        menu.addItem((mi) => mi.setTitle(i18n.bookmarksEmpty()).setDisabled(true));
+      }
+    }
+
+    if (enabled) {
+      menu.addSeparator();
+      menu.addItem((mi) =>
+        mi
+          .setTitle(i18n.openBookmarksPane())
+          .setIcon("bookmark")
+          .onClick(() => {
+            this.executeObsidianCommand("bookmarks:open");
+          })
+      );
+    }
+
+    const rect = anchorEl.getBoundingClientRect();
+    menu.showAtPosition({ x: Math.round(rect.left), y: Math.round(rect.bottom + 4) });
   }
 
   private clampFlowColWidth(width: number): number {
@@ -4847,6 +5071,14 @@ export class FolderBoardView extends ItemView {
       e.stopPropagation();
       if (e.shiftKey) this.promptCreateFolder();
       else this.promptCreateNote();
+      return;
+    }
+
+    // [ID 6.5.72] B: 북마크 드롭다운 메뉴 즉시 열기
+    if (!meta && !e.shiftKey && !e.altKey && code === "KeyB") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.openBookmarksMenu(this.bookmarkBtnEl);
       return;
     }
 

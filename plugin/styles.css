@@ -90,6 +90,44 @@
 .fb-crumb-btn.clickable-icon.is-current:hover {
   background-color: transparent;
 }
+/* [ID 6.7.19] 브레드크럼 볼트 이름 통합 볼트 전환기 버튼 */
+.fb-crumb-btn.clickable-icon.is-vault-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+.fb-crumb-btn.clickable-icon.is-vault-root:hover {
+  background-color: var(--background-modifier-hover);
+}
+.fb-vault-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-faint);
+  opacity: 0.72;
+  transition: opacity 110ms ease, color 110ms ease;
+}
+.fb-vault-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-crumb-btn.is-vault-root:hover .fb-vault-caret {
+  opacity: 1;
+  color: var(--text-muted);
+}
+.fb-vault-caret-btn.clickable-icon {
+  padding: 2px 3px;
+  height: auto;
+  color: var(--text-faint);
+  border-radius: var(--radius-s, 4px);
+}
+.fb-vault-caret-btn.clickable-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.fb-vault-caret-btn.clickable-icon:hover {
+  color: var(--text-normal);
+}
 .fb-crumb-btn.clickable-icon.is-drag-over {
   background-color: var(--background-modifier-hover);
   color: var(--text-normal);

@@ -100,6 +100,13 @@ export const i18n = {
       "Pin tab — keep Folder Board open and open notes beside it"
     ),
   quickEditAria: () => tr("빠른 편집 (Space)", "Quick Edit (Space)"),
+  vaultSwitcherAria: () => tr("볼트 전환 (다른 볼트 열기)", "Switch vault"),
+  bookmarksAria: () => tr("북마크 (B)", "Bookmarks (B)"),
+  bookmarksEmpty: () => tr("저장된 북마크가 없습니다", "No bookmarks yet"),
+  bookmarksDisabled: () => tr("북마크 코어 플러그인이 꺼져 있습니다", "Bookmarks core plugin is disabled"),
+  openBookmarksPane: () => tr("북마크 패널 열기", "Open Bookmarks pane"),
+  settingsAria: () =>
+    tr("옵시디언 설정 (⌘/Ctrl+클릭: Folder Board 설정)", "Obsidian Settings (⌘/Ctrl+click: Folder Board settings)"),
   clearShelfAria: () => tr("바구니 비우기", "Clear shelf"),
   clearSelectionAria: () => tr("선택 해제", "Clear selection"),
 
