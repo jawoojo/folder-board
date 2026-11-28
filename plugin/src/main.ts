@@ -1,17 +1,21 @@
 // [ID 6.6] Folder Board 옵시디언 플러그인 엔트리포인트
 // -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침·접힘 상태 및 사용자 지정 폴더 순서를 관리함.
-import { Command, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
+import { Command, Plugin, WorkspaceLeaf, WorkspaceSidedock, setIcon } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
 import { FolderBoardSettingTab } from "./settings";
-import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings } from "./types";
+import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings, type LayoutColumns } from "./types";
 
 export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
   private expandedSet = new Set<string>();
   private collapsedFlowSet = new Set<string>();
-  private tallGridCardSet = new Set<string>();
   private openBoardCmd: Command | null = null;
   private openBoardHereCmd: Command | null = null;
+  // [ID 6.6.13] Folder Board 활성 시 좌측 사이드바 자동 접힘/복원 상태 추적
+  // -> 보드가 직접 접었을 때만(leftSidebarCollapsedByBoard) 다른 탭 전환 시 복원해 수동 접힘 상태를 존중함.
+  private leftSidebarCollapsedByBoard = false;
+  private lastBoardVisible = false;
+  private sidebarSyncRaf: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -44,10 +48,112 @@ export default class FolderBoardPlugin extends Plugin {
     this.addSettingTab(new FolderBoardSettingTab(this.app, this));
 
     // [ID 6.6.11] 좌측 기본 파일 탐색기 상단 툴바(.nav-buttons-container)에 Folder Board 바로가기 버튼 주입
-    this.app.workspace.onLayoutReady(() => this.injectFileExplorerLaunchButtons());
+    this.app.workspace.onLayoutReady(() => {
+      this.injectFileExplorerLaunchButtons();
+      this.scheduleLeftSidebarSync();
+    });
     this.registerEvent(
-      this.app.workspace.on("layout-change", () => this.injectFileExplorerLaunchButtons())
+      this.app.workspace.on("layout-change", () => {
+        this.injectFileExplorerLaunchButtons();
+        this.scheduleLeftSidebarSync();
+      })
     );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.scheduleLeftSidebarSync();
+      })
+    );
+  }
+
+  // [ID 6.6.13] Folder Board 가시성 기준 좌측 사이드바 스마트 자동 접힘·복원
+  // -> 1) 수동 접힘 존중(직접 접어둔 사이드바는 나갔다 와도 안 펼침),
+  // -> 2) Space 우측 분할 편집기 편집 중에는 보드가 여전히 화면에 보이므로 사이드바가 튀어나오지 않음,
+  // -> 3) 보드 화면에서 사용자가 직접 사이드바를 펼치면 재접힘하지 않음.
+  private getDesktopLeftSplit(): WorkspaceSidedock | null {
+    const split = this.app.workspace.leftSplit;
+    return split instanceof WorkspaceSidedock ? split : null;
+  }
+
+  private isAnyFolderBoardVisible(): boolean {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
+    for (const leaf of leaves) {
+      if (leaf.getRoot() !== this.app.workspace.rootSplit) continue;
+      const el = leaf.view?.containerEl;
+      if (el && el.isConnected && el.offsetParent !== null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private scheduleLeftSidebarSync(): void {
+    if (this.sidebarSyncRaf !== null) {
+      window.cancelAnimationFrame(this.sidebarSyncRaf);
+    }
+    this.sidebarSyncRaf = window.requestAnimationFrame(() => {
+      this.sidebarSyncRaf = null;
+      this.syncLeftSidebarAutoCollapse();
+    });
+  }
+
+  private syncLeftSidebarAutoCollapse(): void {
+    const leftSplit = this.getDesktopLeftSplit();
+    const nowVisible = this.isAnyFolderBoardVisible();
+    const wasVisible = this.lastBoardVisible;
+    this.lastBoardVisible = nowVisible;
+
+    if (!leftSplit) return;
+
+    if (!this.settings.autoCollapseLeftSidebar) {
+      if (this.leftSidebarCollapsedByBoard) {
+        leftSplit.expand();
+        this.leftSidebarCollapsedByBoard = false;
+      }
+      return;
+    }
+
+    if (nowVisible && !wasVisible) {
+      // 보드 화면에 새로 진입: 좌측 패널이 열려 있었을 때만 접고 플래그 기록
+      if (!leftSplit.collapsed) {
+        leftSplit.collapse();
+        this.leftSidebarCollapsedByBoard = true;
+      } else {
+        this.leftSidebarCollapsedByBoard = false;
+      }
+    } else if (!nowVisible && wasVisible) {
+      // 보드 화면에서 완전히 벗어남: 보드가 접었던 경우에만 원래대로 펼침
+      if (this.leftSidebarCollapsedByBoard) {
+        leftSplit.expand();
+        this.leftSidebarCollapsedByBoard = false;
+      }
+    } else if (nowVisible && !leftSplit.collapsed) {
+      // 보드 화면에서 사용자가 직접 좌측 패널을 열었으면 자동 복원 대상 해제 (강제 재접힘 안 함)
+      this.leftSidebarCollapsedByBoard = false;
+    }
+  }
+
+  async setAutoCollapseLeftSidebar(enabled: boolean): Promise<void> {
+    this.settings.autoCollapseLeftSidebar = enabled;
+    await this.saveSettings();
+
+    const leftSplit = this.getDesktopLeftSplit();
+    if (leftSplit) {
+      if (enabled && this.isAnyFolderBoardVisible()) {
+        if (!leftSplit.collapsed) {
+          leftSplit.collapse();
+          this.leftSidebarCollapsedByBoard = true;
+        }
+      } else if (!enabled && this.leftSidebarCollapsedByBoard) {
+        leftSplit.expand();
+        this.leftSidebarCollapsedByBoard = false;
+      }
+    }
+
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
+      if (leaf.view instanceof FolderBoardView) {
+        leaf.view.syncSidebarCollapseButtonState();
+      }
+    }
   }
 
   // [ID 6.6.11] 옵시디언 기본 탐색기 헤더 버튼 주입 및 언로드 정리
@@ -104,6 +210,14 @@ export default class FolderBoardPlugin extends Plugin {
   }
 
   onunload(): void {
+    if (this.sidebarSyncRaf !== null) {
+      window.cancelAnimationFrame(this.sidebarSyncRaf);
+      this.sidebarSyncRaf = null;
+    }
+    if (this.leftSidebarCollapsedByBoard) {
+      this.getDesktopLeftSplit()?.expand();
+      this.leftSidebarCollapsedByBoard = false;
+    }
     this.removeFileExplorerLaunchButtons();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_FOLDER_BOARD);
   }
@@ -126,7 +240,11 @@ export default class FolderBoardPlugin extends Plugin {
       }
     }
 
-    this.app.workspace.revealLeaf(leaf);
+    // [ID 6.6.12] 메인 탭 전환 시 revealLeaf()의 갈색 강조 깜박임 방지
+    // -> 사이드바 서랍에 도킹된 경우에만 revealLeaf()를 호출하고, 메인 탭은 setActiveLeaf()로 즉시 깔끔하게 전환함.
+    if (leaf.getRoot() !== this.app.workspace.rootSplit) {
+      this.app.workspace.revealLeaf(leaf);
+    }
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
 
     if (folderPath !== undefined && leaf.view instanceof FolderBoardView) {
@@ -152,10 +270,97 @@ export default class FolderBoardPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const saved = (await this.loadData()) as Partial<FolderBoardSettings> | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
-    if (!this.settings.folderOrder || typeof this.settings.folderOrder !== "object") {
-      this.settings.folderOrder = {};
+    const saved = (await this.loadData()) as (Omit<Partial<FolderBoardSettings>, "gridCols"> & { gridCols?: unknown }) | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved) as FolderBoardSettings;
+
+    // [ID 6.6.14] 구버전 레이아웃 설정(2/3/4/auto/scroll) → Flow/Vertical/Horizontal 자동 마이그레이션
+    const rawLayout: unknown = saved?.gridCols;
+    if (rawLayout === 2 || rawLayout === 3 || rawLayout === 4) {
+      this.settings.gridCols = "vertical";
+      if (typeof saved?.verticalCols !== "number") {
+        this.settings.verticalCols = rawLayout;
+      }
+    } else if (rawLayout === "auto") {
+      this.settings.gridCols = "vertical";
+    } else if (rawLayout === "scroll") {
+      this.settings.gridCols = "horizontal";
+    } else if (
+      this.settings.gridCols !== "flow" &&
+      this.settings.gridCols !== "vertical" &&
+      this.settings.gridCols !== "horizontal"
+    ) {
+      this.settings.gridCols = DEFAULT_SETTINGS.gridCols;
+    }
+
+    if (typeof this.settings.verticalCols !== "number" || !Number.isFinite(this.settings.verticalCols)) {
+      this.settings.verticalCols = DEFAULT_SETTINGS.verticalCols;
+    } else {
+      this.settings.verticalCols = Math.max(1, Math.min(6, Math.round(this.settings.verticalCols)));
+    }
+    if (typeof this.settings.horizontalCols !== "number" || !Number.isFinite(this.settings.horizontalCols)) {
+      this.settings.horizontalCols = DEFAULT_SETTINGS.horizontalCols;
+    } else {
+      this.settings.horizontalCols = Math.max(1, Math.min(6, Math.round(this.settings.horizontalCols)));
+    }
+    // [ID 6.6.15] 모드별 독립 카드 높이(cardRowUnitsByMode) 및 독립 폴더 순서(folderOrderByMode) 초기화·마이그레이션
+    const savedUnitsByMode = saved?.cardRowUnitsByMode;
+    this.settings.cardRowUnitsByMode = {
+      vertical:
+        savedUnitsByMode?.vertical && typeof savedUnitsByMode.vertical === "object"
+          ? { ...savedUnitsByMode.vertical }
+          : {},
+      horizontal:
+        savedUnitsByMode?.horizontal && typeof savedUnitsByMode.horizontal === "object"
+          ? { ...savedUnitsByMode.horizontal }
+          : {}
+    };
+    if (saved?.cardRowUnits && typeof saved.cardRowUnits === "object") {
+      for (const [k, v] of Object.entries(saved.cardRowUnits)) {
+        if (typeof v === "number" && Number.isFinite(v) && !(k in this.settings.cardRowUnitsByMode.vertical)) {
+          this.settings.cardRowUnitsByMode.vertical[k] = v;
+        }
+      }
+      delete this.settings.cardRowUnits;
+    }
+    if (Array.isArray(this.settings.tallGridCards) && this.settings.tallGridCards.length > 0) {
+      for (const k of this.settings.tallGridCards) {
+        if (!(k in this.settings.cardRowUnitsByMode.vertical)) {
+          this.settings.cardRowUnitsByMode.vertical[k] = 12;
+        }
+      }
+      delete this.settings.tallGridCards;
+    }
+
+    const savedOrderByMode = saved?.folderOrderByMode;
+    this.settings.folderOrderByMode = {
+      flow:
+        savedOrderByMode?.flow && typeof savedOrderByMode.flow === "object"
+          ? { ...savedOrderByMode.flow }
+          : {},
+      vertical:
+        savedOrderByMode?.vertical && typeof savedOrderByMode.vertical === "object"
+          ? { ...savedOrderByMode.vertical }
+          : {},
+      horizontal:
+        savedOrderByMode?.horizontal && typeof savedOrderByMode.horizontal === "object"
+          ? { ...savedOrderByMode.horizontal }
+          : {}
+    };
+    // 구버전 공용 folderOrder → 각 모드 초기값으로 1회 복제 후 이후부터 완전 독립 저장
+    if (saved?.folderOrder && typeof saved.folderOrder === "object") {
+      const legacyEntries = Object.entries(saved.folderOrder);
+      if (legacyEntries.length > 0) {
+        for (const mode of ["flow", "vertical", "horizontal"] as const) {
+          if (Object.keys(this.settings.folderOrderByMode[mode]).length === 0) {
+            for (const [parentKey, list] of legacyEntries) {
+              if (Array.isArray(list)) {
+                this.settings.folderOrderByMode[mode][parentKey] = [...list];
+              }
+            }
+          }
+        }
+      }
+      delete this.settings.folderOrder;
     }
     if (typeof this.settings.flowColumnWidth !== "number" || !Number.isFinite(this.settings.flowColumnWidth)) {
       this.settings.flowColumnWidth = DEFAULT_SETTINGS.flowColumnWidth;
@@ -184,15 +389,16 @@ export default class FolderBoardPlugin extends Plugin {
     if (typeof this.settings.autoPinTab !== "boolean") {
       this.settings.autoPinTab = DEFAULT_SETTINGS.autoPinTab;
     }
+    if (typeof this.settings.autoCollapseLeftSidebar !== "boolean") {
+      this.settings.autoCollapseLeftSidebar = DEFAULT_SETTINGS.autoCollapseLeftSidebar;
+    }
     this.expandedSet = new Set(this.settings.expandedFolders || []);
     this.collapsedFlowSet = new Set(this.settings.collapsedFlowSections || []);
-    this.tallGridCardSet = new Set(this.settings.tallGridCards || []);
   }
 
   async saveSettings(): Promise<void> {
     this.settings.expandedFolders = [...this.expandedSet];
     this.settings.collapsedFlowSections = [...this.collapsedFlowSet];
-    this.settings.tallGridCards = [...this.tallGridCardSet];
     await this.saveData(this.settings);
   }
 
@@ -261,24 +467,32 @@ export default class FolderBoardPlugin extends Plugin {
     return Object.values(this.settings.flowWindowSizes).some((v) => v === "lg" || typeof v === "number");
   }
 
-  // [ID 6.6.10] 카드 모드(그리드·세로) 세로 확장(화면 1줄) 카드 상태 영속 관리
-  isGridCardTall(key: string): boolean {
-    return this.tallGridCardSet.has(key);
+  // [ID 6.6.10] Vertical/Horizontal 모드별 독립 12분할 카드 높이(3=1/4 .. 12=전체) 영속 관리
+  getCardRowUnits(mode: "vertical" | "horizontal", key: string): number | null {
+    const v = this.settings.cardRowUnitsByMode[mode]?.[key];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
   }
 
-  async toggleGridCardTall(key: string): Promise<boolean> {
-    const next = !this.tallGridCardSet.has(key);
-    if (next) this.tallGridCardSet.add(key);
-    else this.tallGridCardSet.delete(key);
+  async setCardRowUnits(mode: "vertical" | "horizontal", key: string, units: number | null): Promise<void> {
+    const bucket = this.settings.cardRowUnitsByMode[mode];
+    if (units === null) {
+      delete bucket[key];
+    } else {
+      bucket[key] = units;
+    }
     await this.saveSettings();
-    return next;
   }
 
   async resetAllExpandedStates(): Promise<void> {
     this.expandedSet.clear();
     this.collapsedFlowSet.clear();
-    this.tallGridCardSet.clear();
+    this.settings.cardRowUnitsByMode = { vertical: {}, horizontal: {} };
     this.settings.flowWindowSizes = {};
+    await this.saveSettings();
+  }
+
+  async resetAllFolderOrders(): Promise<void> {
+    this.settings.folderOrderByMode = { flow: {}, vertical: {}, horizontal: {} };
     await this.saveSettings();
   }
 
@@ -294,10 +508,13 @@ export default class FolderBoardPlugin extends Plugin {
       this.collapsedFlowSet.add(newPath);
       changed = true;
     }
-    if (this.tallGridCardSet.has(oldPath)) {
-      this.tallGridCardSet.delete(oldPath);
-      this.tallGridCardSet.add(newPath);
-      changed = true;
+    for (const cardMode of ["vertical", "horizontal"] as const) {
+      const bucket = this.settings.cardRowUnitsByMode[cardMode];
+      if (oldPath in bucket) {
+        bucket[newPath] = bucket[oldPath];
+        delete bucket[oldPath];
+        changed = true;
+      }
     }
     if (oldPath in this.settings.flowWindowSizes) {
       this.settings.flowWindowSizes[newPath] = this.settings.flowWindowSizes[oldPath];
@@ -305,26 +522,34 @@ export default class FolderBoardPlugin extends Plugin {
       changed = true;
     }
 
-    const nextOrder: Record<string, string[]> = {};
-    for (const [parentKey, list] of Object.entries(this.settings.folderOrder)) {
-      const updatedParent = parentKey === oldPath ? newPath : parentKey;
-      const updatedList = list.map((p) => (p === oldPath ? newPath : p));
-      if (updatedParent !== parentKey || updatedList.some((v, i) => v !== list[i])) {
-        changed = true;
+    for (const layoutMode of ["flow", "vertical", "horizontal"] as const) {
+      const prevMap = this.settings.folderOrderByMode[layoutMode];
+      const nextOrder: Record<string, string[]> = {};
+      for (const [parentKey, list] of Object.entries(prevMap)) {
+        const updatedParent = parentKey === oldPath ? newPath : parentKey;
+        const updatedList = list.map((p) => (p === oldPath ? newPath : p));
+        if (updatedParent !== parentKey || updatedList.some((v, i) => v !== list[i])) {
+          changed = true;
+        }
+        nextOrder[updatedParent] = updatedList;
       }
-      nextOrder[updatedParent] = updatedList;
+      this.settings.folderOrderByMode[layoutMode] = nextOrder;
     }
-    this.settings.folderOrder = nextOrder;
 
     if (changed) await this.saveSettings();
   }
 
-  getFolderOrder(parentPath: string): string[] {
-    return this.settings.folderOrder[parentPath] || [];
+  getFolderOrder(mode: LayoutColumns, parentPath: string): string[] {
+    return this.settings.folderOrderByMode[mode]?.[parentPath] || [];
   }
 
-  async setFolderOrder(parentPath: string, orderedPaths: string[]): Promise<void> {
-    this.settings.folderOrder[parentPath] = orderedPaths;
+  async setFolderOrder(mode: LayoutColumns, parentPath: string, orderedPaths: string[]): Promise<void> {
+    this.settings.folderOrderByMode[mode][parentPath] = orderedPaths;
+    await this.saveSettings();
+  }
+
+  async clearFolderOrder(mode: LayoutColumns, parentPath: string): Promise<void> {
+    delete this.settings.folderOrderByMode[mode][parentPath];
     await this.saveSettings();
   }
 }

@@ -34,19 +34,15 @@ export class FolderBoardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("기본 레이아웃")
+      .setDesc("Flow(연속 다단), Vertical(세로 스크롤), Horizontal(가로 스크롤). Vertical·Horizontal은 카드 경계 드래그로 가로·세로 분할을 자유 조절합니다.")
       .addDropdown((dd) =>
         dd
-          .addOption("flow", "여러줄 모드 (섹션 분류 · 기본)")
-          .addOption("2", "2열 그리드")
-          .addOption("3", "3열 그리드")
-          .addOption("4", "4열 그리드")
-          .addOption("auto", "세로 모드 (넓이 자동 맞춤)")
-          .addOption("scroll", "가로 모드 (세로 펼침 · 가로 스크롤)")
-          .setValue(String(this.plugin.settings.gridCols))
+          .addOption("flow", "Flow 모드 (연속 다단 · 기본)")
+          .addOption("vertical", "Vertical 모드 (세로 스크롤)")
+          .addOption("horizontal", "Horizontal 모드 (가로 스크롤)")
+          .setValue(this.plugin.settings.gridCols)
           .onChange(async (value) => {
-            this.plugin.settings.gridCols = (
-              value === "scroll" || value === "auto" || value === "flow" ? value : Number(value)
-            ) as LayoutColumns;
+            this.plugin.settings.gridCols = value as LayoutColumns;
             await this.plugin.saveSettings();
             this.plugin.refreshOpenViews();
           })
@@ -93,9 +89,21 @@ export class FolderBoardSettingTab extends PluginSettingTab {
         })
       );
 
+    // [ID 6.4.4] Folder Board 활성 시 좌측 패널(기본 탐색기) 스마트 자동 접힘·복원 토글
+    new Setting(containerEl)
+      .setName("폴더 보드에서 좌측 패널 자동 접기")
+      .setDesc(
+        "폴더 보드를 볼 때 좌측 탐색기 패널을 자동으로 접어 화면을 넓히고, 다른 노트로 이동하면 다시 펼칩니다. (수동으로 접어둔 상태 및 Space 분할 편집 중에는 유지)"
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.autoCollapseLeftSidebar).onChange(async (value) => {
+          await this.plugin.setAutoCollapseLeftSidebar(value);
+        })
+      );
+
     new Setting(containerEl)
       .setName("카드 상하 끝에서 ↑/↓ 동작")
-      .setDesc("적응형: 가로 모드는 카드 내부 순환, 2D 그리드·세로·여러줄 모드는 위/아래 섹션으로 연결")
+      .setDesc("적응형: 같은 열의 위/아래 카드·섹션으로 자연스럽게 연결 / 순환: 항상 현재 카드 내부 순환")
       .addDropdown((dd) =>
         dd
           .addOption("adaptive", "모드 적응형 (추천)")
@@ -109,10 +117,10 @@ export class FolderBoardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("사용자 지정 폴더 순서 초기화")
+      .setDesc("Flow · Vertical · Horizontal 모든 모드에 저장된 카드 순서를 기본 이름순으로 되돌립니다.")
       .addButton((btn) =>
         btn.setButtonText("초기화").onClick(async () => {
-          this.plugin.settings.folderOrder = {};
-          await this.plugin.saveSettings();
+          await this.plugin.resetAllFolderOrders();
           this.plugin.refreshOpenViews();
         })
       );

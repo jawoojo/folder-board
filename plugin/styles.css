@@ -186,7 +186,7 @@
   flex-direction: column;
 }
 
-/* [ID 6.7.2] 세로 펼침(가로 스크롤) 모드 -> 폴더 수와 무관하게 세로 100%로 길게 펼치고 좌우 스크롤 */
+/* [ID 6.7.2] 가로 스크롤 캔버스 (Flow · Horizontal 모드 공용) */
 .fb-canvas.is-horizontal-scroll {
   overflow-x: auto;
   overflow-y: hidden;
@@ -200,52 +200,37 @@
   flex: 1;
   min-height: 100%;
 }
-.fb-grid.fb-cols-1 { grid-template-columns: minmax(0, 1fr); }
-.fb-grid.fb-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.fb-grid.fb-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.fb-grid.fb-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
-.fb-grid.fb-rows-1 {
-  grid-auto-rows: minmax(260px, 1fr);
-}
-.fb-grid.fb-rows-2 {
-  grid-auto-rows: minmax(260px, 1fr);
-}
-.fb-grid.fb-rows-many {
-  grid-auto-rows: 340px;
+/* [ID 6.7.3] Vertical 모드 (세로 스크롤 · 1~6열 드래그 분할 × 12단위 카드 높이) */
+.fb-grid.fb-layout-vertical {
+  display: grid;
+  grid-auto-flow: row dense;
+  grid-template-columns: repeat(var(--fb-grid-cols, 3), minmax(0, 1fr));
+  grid-auto-rows: var(--fb-unit-row-h, 52px);
+  gap: 10px;
+  align-items: stretch;
   flex: 0 0 auto;
-  min-height: auto;
+  min-height: 100%;
+  width: 100%;
 }
 
-/* [ID 6.7.3] 세로 모드(넓이 자동 맞춤) -> 현재 폭에 따라 열 수를 자동 계산하고 여러 줄이면 위아래 스크롤 */
-.fb-grid.fb-layout-auto {
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-}
-.fb-grid.fb-layout-auto.fb-rows-1 {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  grid-auto-rows: minmax(260px, 1fr);
-}
-.fb-grid.fb-layout-auto.fb-rows-auto {
-  grid-auto-rows: 320px;
-  flex: 0 0 auto;
-  min-height: auto;
-}
-
-.fb-grid.fb-layout-scroll {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
+/* [ID 6.7.4] Horizontal 모드 (가로 스크롤 · 화면 N등분 드래그 분할 × 12단위 카드 높이) */
+.fb-grid.fb-layout-horizontal {
+  display: grid;
+  grid-auto-flow: column dense;
+  grid-template-rows: repeat(12, var(--fb-unit-row-h, 52px));
+  grid-auto-columns: var(--fb-grid-col-w, 280px);
+  gap: 10px;
   align-items: stretch;
   height: 100%;
   min-height: 100%;
   width: max-content;
   min-width: 100%;
-  gap: 10px;
 }
-.fb-grid.fb-layout-scroll .fb-card {
-  flex: 0 0 280px;
-  width: 280px;
-  height: 100%;
+
+.fb-grid.fb-layout-vertical .fb-card,
+.fb-grid.fb-layout-horizontal .fb-card {
+  grid-row: span var(--fb-card-row-span, 6);
 }
 
 /* [ID 6.7.9] 여러줄 모드(연속 다단 트리 탐색기 + 고정 구분선 제거 + 드래그 가변 열 폭) */
@@ -667,55 +652,54 @@
   transition: border-color 120ms ease, background-color 120ms ease;
 }
 
-/* [ID 6.7.18] 카드 모드(2/3/4열 그리드 · 세로) 세로 확장(화면 1줄) + 하단 호버 기호 전용 토글 */
-.fb-grid:not(.fb-layout-flow):not(.fb-layout-scroll) .fb-card.is-card-tall {
-  grid-row: span var(--fb-tall-span, 2);
-}
-.fb-grid.fb-rows-1 .fb-card-tall-zone {
-  display: none;
-}
-.fb-card-tall-zone {
+/* [ID 6.7.18] Vertical/Horizontal 카드 하단 세로 분할 드래그 리사이저 + 실시간 분할 배지 */
+.fb-card-resize-bottom {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: 12px;
+  right: 12px;
   bottom: 0;
-  height: 20px;
+  height: 10px;
+  cursor: row-resize;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  z-index: 5;
+  padding-bottom: 2px;
+  z-index: 6;
 }
-.fb-card-tall-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px !important;
-  height: 15px !important;
-  padding: 0 !important;
-  border-radius: 99px !important;
-  border: 1px solid var(--background-modifier-border-hover) !important;
-  background-color: var(--background-primary) !important;
-  color: var(--text-muted) !important;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16) !important;
-  cursor: pointer;
-  opacity: 0;
+.fb-card-resize-bottom::after {
+  content: "";
+  width: 34px;
+  height: 3px;
+  border-radius: 99px;
+  background-color: transparent;
+  transition: background-color 130ms ease, width 130ms ease;
+}
+.fb-card-resize-bottom:hover::after {
+  width: 48px;
+  background-color: color-mix(in srgb, var(--text-normal) 34%, transparent);
+}
+.fb-card-resize-bottom.is-dragging::after {
+  width: 64px;
+  background-color: var(--interactive-accent);
+}
+.fb-card.is-resizing {
+  border-color: color-mix(in srgb, var(--interactive-accent) 65%, transparent) !important;
+}
+
+.fb-resize-badge {
+  position: fixed;
+  z-index: 9999;
   pointer-events: none;
-  transform: translateY(2px) scale(0.92);
-  transition: opacity 130ms ease, transform 130ms ease, color 110ms ease, border-color 110ms ease;
-}
-.fb-card-tall-btn svg {
-  width: 12px;
-  height: 12px;
-}
-.fb-card-tall-zone:hover > .fb-card-tall-btn,
-.fb-card-tall-btn:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0) scale(1);
-}
-.fb-card-tall-btn:hover {
-  color: var(--text-normal) !important;
-  border-color: color-mix(in srgb, var(--text-normal) 42%, transparent) !important;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border-hover);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+  font-family: var(--font-interface);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
 }
 
 .fb-card:hover {

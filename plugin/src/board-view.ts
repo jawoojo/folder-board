@@ -4,12 +4,15 @@
 import {
   EventRef,
   ItemView,
+  MarkdownView,
+  Menu,
   Notice,
   Scope,
   TAbstractFile,
   TFile,
   TFolder,
   WorkspaceLeaf,
+  getIcon,
   normalizePath,
   setIcon
 } from "obsidian";
@@ -37,6 +40,15 @@ const FLOW_COL_GAP = 24;
 const FLOW_CANVAS_PAD_LEFT = 14;
 const FLOW_COL_MIN_WIDTH = 180;
 const FLOW_COL_MAX_WIDTH = 560;
+const GRID_GAP = 10;
+const GRID_CANVAS_PAD_X = 28;
+const GRID_CANVAS_PAD_Y = 24;
+const GRID_MIN_COLS = 1;
+const GRID_MAX_COLS = 6;
+const GRID_CARD_MIN_WIDTH = 160;
+const GRID_CARD_MIN_HEIGHT = 150;
+const GRID_ROW_UNITS_TOTAL = 12;
+const GRID_ROW_SNAP_UNITS = [3, 4, 6, 8, 9, 12] as const;
 const QL_SPLIT_MIN_RATIO = 0.18;
 const QL_SPLIT_MAX_RATIO = 0.75;
 
@@ -127,8 +139,10 @@ export class FolderBoardView extends ItemView {
   private clearSearchEl!: HTMLElement;
   private layoutBtns: Array<{ value: LayoutColumns; el: HTMLButtonElement }> = [];
   private sortBtnEl!: HTMLButtonElement;
+  private folderSortBtnEl!: HTMLButtonElement;
   private newNoteBtnEl!: HTMLButtonElement;
   private newFolderBtnEl!: HTMLButtonElement;
+  private sidebarAutoCollapseBtnEl!: HTMLButtonElement;
   private pinBtnEl!: HTMLButtonElement;
   private qlBtnEl!: HTMLButtonElement;
   private canvasEl!: HTMLElement;
@@ -144,11 +158,13 @@ export class FolderBoardView extends ItemView {
   private vaultRefs: EventRef[] = [];
   private resizeObserver: ResizeObserver | null = null;
   private flowResizerRaf: number | null = null;
+  private resizeBadgeEl: HTMLElement | null = null;
   private lastCanvasHeight = 0;
   // [ID 6.5.32] 뷰 전용 Obsidian Scope -> 옵시디언 글로벌 Cmd+F/A/D 단축키보다 우선해 보드 활성 시 안전하게 가로챔
   private viewScope: Scope | null = null;
   private scopeActive = false;
   private boundKeydown: (e: KeyboardEvent) => void;
+  private boundQuickEditEscKeydown: (e: KeyboardEvent) => void;
   private boundKeyup: (e: KeyboardEvent) => void;
   private boundWindowBlur: () => void;
   private boundDragOver: (e: DragEvent) => void;
@@ -163,6 +179,7 @@ export class FolderBoardView extends ItemView {
     this.plugin = plugin;
 
     this.boundKeydown = this.handleKeydown.bind(this);
+    this.boundQuickEditEscKeydown = this.handleQuickEditEscKeydown.bind(this);
     this.boundKeyup = this.handleKeyup.bind(this);
     this.boundWindowBlur = this.cancelCarryMode.bind(this);
     this.boundDragOver = this.handleDragOver.bind(this);
@@ -241,6 +258,18 @@ export class FolderBoardView extends ItemView {
       pinned
         ? "탭 고정됨 — 노트 열 때 옆 탭에서 열림 (클릭해 해제)"
         : "탭 고정 (Pin) — 보드를 유지한 채 옆 탭에서 노트 열기"
+    );
+  }
+
+  syncSidebarCollapseButtonState(): void {
+    if (!this.sidebarAutoCollapseBtnEl) return;
+    const enabled = this.plugin.settings.autoCollapseLeftSidebar;
+    this.sidebarAutoCollapseBtnEl.toggleClass("is-active", enabled);
+    this.sidebarAutoCollapseBtnEl.setAttr(
+      "aria-label",
+      enabled
+        ? "좌측 패널 자동 접기 켜짐 — 보드에서만 접고 나가면 복원 (클릭해 끄기)"
+        : "폴더 보드에서 좌측 패널 자동 접기 켜기"
     );
   }
 
@@ -404,6 +433,7 @@ export class FolderBoardView extends ItemView {
     this.viewScope = null;
     this.unbindVaultEvents();
     window.removeEventListener("keydown", this.boundKeydown, true);
+    window.removeEventListener("keydown", this.boundQuickEditEscKeydown, true);
     document.removeEventListener("keyup", this.boundKeyup, true);
     window.removeEventListener("blur", this.boundWindowBlur);
     this.contentEl.removeEventListener("dragover", this.boundDragOver);
@@ -431,6 +461,7 @@ export class FolderBoardView extends ItemView {
       window.cancelAnimationFrame(this.flowResizerRaf);
       this.flowResizerRaf = null;
     }
+    this.hideResizeBadge();
     this.contentEl.empty();
   }
 
@@ -495,15 +526,12 @@ export class FolderBoardView extends ItemView {
       this.renderGridAndHeader();
     });
 
-    // [ID 6.5.12] 레이아웃 세그먼트 (여러줄 모드를 기본 최좌측 배치 + 2/3/4열 · 세로 · 가로)
+    // [ID 6.5.12] 3대 레이아웃 세그먼트 (Flow 기본 최좌측 · Vertical 세로 스크롤 · Horizontal 가로 스크롤)
     const colGroup = controls.createDiv({ cls: "fb-segmented" });
     const layoutOptions: Array<{ value: LayoutColumns; label: string; aria: string; icon?: string }> = [
-      { value: "flow", label: "", aria: "여러줄 모드 (섹션 분류 · 기본)", icon: "list-tree" },
-      { value: 2, label: "2", aria: "2열 그리드" },
-      { value: 3, label: "3", aria: "3열 그리드" },
-      { value: 4, label: "4", aria: "4열 그리드" },
-      { value: "auto", label: "", aria: "세로 모드 (넓이 자동 맞춤)", icon: "layout-grid" },
-      { value: "scroll", label: "", aria: "가로 모드 (세로 펼침 · 가로 스크롤)", icon: "columns" }
+      { value: "flow", label: "", aria: "Flow 모드 — 연속 다단 트리 (기본)", icon: "list-tree" },
+      { value: "vertical", label: "", aria: "Vertical 모드 — 세로 스크롤 카드 (경계 드래그 분할)", icon: "layout-grid" },
+      { value: "horizontal", label: "", aria: "Horizontal 모드 — 가로 스크롤 카드 (경계 드래그 분할)", icon: "columns" }
     ];
 
     this.layoutBtns = layoutOptions.map((opt) => {
@@ -521,12 +549,25 @@ export class FolderBoardView extends ItemView {
       return { value: opt.value, el: btn };
     });
 
-    // 정렬 토글
+    // 파일 정렬 토글
     this.sortBtnEl = controls.createEl("button", { cls: "clickable-icon fb-tool-btn" });
     this.sortBtnEl.addEventListener("click", async () => {
       this.plugin.settings.sortBy = this.plugin.settings.sortBy === "name" ? "mtime" : "name";
       await this.plugin.saveSettings();
       this.renderGridAndHeader();
+    });
+
+    // [ID 6.5.66] 현재 레이아웃 모드 폴더 순서 1회 정렬 버튼 (고정 없음 · 정렬 직후 자유 드래그 가능)
+    this.folderSortBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": "폴더 순서 정렬 (현재 모드 1회 정렬 · 이후 자유 드래그)" }
+    });
+    setIcon(
+      this.folderSortBtnEl,
+      this.pickAvailableIcon(["arrow-down-az", "arrow-down-a-z", "arrow-up-narrow-wide", "sort-asc", "list-ordered"])
+    );
+    this.folderSortBtnEl.addEventListener("click", () => {
+      this.openFolderSortMenu(this.folderSortBtnEl);
     });
 
     controls.createDiv({ cls: "fb-divider" });
@@ -541,6 +582,16 @@ export class FolderBoardView extends ItemView {
     this.newFolderBtnEl.addEventListener("click", () => this.promptCreateFolder());
 
     controls.createDiv({ cls: "fb-divider" });
+
+    // [ID 6.5.62] 보드 상단 좌측 패널 자동 접기 토글 (설정 탭과 양방향 동기화)
+    this.sidebarAutoCollapseBtnEl = controls.createEl("button", {
+      cls: "clickable-icon fb-tool-btn",
+      attr: { "aria-label": "폴더 보드에서 좌측 패널 자동 접기" }
+    });
+    setIcon(this.sidebarAutoCollapseBtnEl, "panel-left-close");
+    this.sidebarAutoCollapseBtnEl.addEventListener("click", () => {
+      void this.plugin.setAutoCollapseLeftSidebar(!this.plugin.settings.autoCollapseLeftSidebar);
+    });
 
     // [ID 6.5.61] 보드 상단 원클릭 탭 고정(Pin) 토글 -> 설정 탭에 가지 않고 즉시 고정/해제 및 설정 기억
     this.pinBtnEl = controls.createEl("button", {
@@ -574,12 +625,14 @@ export class FolderBoardView extends ItemView {
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
     this.colResizersEl = this.canvasEl.createDiv({ cls: "fb-col-resizers" });
 
-    // [ID 6.5.19] 창 크기 변경 시 세로 자동 열 수, 그리드 1줄 확장 span, 여러줄 모드 1열 확장 상한 및 호버 리사이즈 핸들 동기화
+    // [ID 6.5.19] 창 크기 변경 시 Vertical/Horizontal 12분할 행 높이·열 폭·리사이즈 핸들 및 Flow 다단 동기화
     this.resizeObserver = new ResizeObserver(() => {
       if (this.renderedCards.length === 0) return;
       const mode = this.plugin.settings.gridCols;
-      if (mode === "auto" || typeof mode === "number") {
+      if (mode === "vertical" || mode === "horizontal") {
         this.applyGridLayoutClasses(this.renderedCards.length);
+        this.syncCardRowSpansInPlace();
+        this.scheduleFlowColResizersSync();
       } else if (mode === "flow") {
         const nextH = this.canvasEl.clientHeight;
         if (
@@ -596,15 +649,18 @@ export class FolderBoardView extends ItemView {
     });
     this.resizeObserver.observe(this.canvasEl);
 
-    // 가로 모드 및 여러줄(연속 다단) 모드에서 세로 휠을 가로 스크롤로 자연스럽게 연결
-    // -> 여러줄 모드의 가상 스크롤 대상 폴더 위에서는 폴더 자체 세로 슬라이딩을 우선함.
+    // Horizontal 및 Flow 모드에서 세로 휠을 가로 스크롤로 자연스럽게 연결
+    // -> 카드 내부가 실제로 세로 스크롤 가능한 경우에만 카드 내부 스크롤을 우선하고, 아니면 가로 스크롤함.
     this.canvasEl.addEventListener(
       "wheel",
       (e: WheelEvent) => {
         const mode = this.plugin.settings.gridCols;
-        if (mode !== "scroll" && mode !== "flow") return;
+        if (mode !== "horizontal" && mode !== "flow") return;
         const target = e.target as HTMLElement | null;
-        if (mode === "scroll" && target?.closest(".fb-card-body")) return;
+        if (mode === "horizontal") {
+          const cardBody = target?.closest<HTMLElement>(".fb-card-body");
+          if (cardBody && cardBody.scrollHeight > cardBody.clientHeight + 1) return;
+        }
         if (mode === "flow" && target?.closest('.fb-card[data-windowed="true"]')) return;
         if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
           this.canvasEl.scrollLeft += e.deltaY;
@@ -728,6 +784,7 @@ export class FolderBoardView extends ItemView {
 
   private bindInteractionEvents(): void {
     window.addEventListener("keydown", this.boundKeydown, true);
+    window.addEventListener("keydown", this.boundQuickEditEscKeydown, true);
     document.addEventListener("keyup", this.boundKeyup, true);
     window.addEventListener("blur", this.boundWindowBlur);
     this.contentEl.addEventListener("dragover", this.boundDragOver);
@@ -750,8 +807,8 @@ export class FolderBoardView extends ItemView {
 
     folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
-    // [ID 6.5.30] 사용자 지정 폴더 카드 순서 우선 적용 (미지정 신규 폴더는 뒤쪽에 이름순 배치)
-    const customOrder = this.plugin.getFolderOrder(normalizeFolderRef(folder));
+    // [ID 6.5.30] 현재 레이아웃 모드별 독립 폴더 카드 순서 우선 적용 (미지정 신규 폴더는 뒤쪽에 이름순 배치)
+    const customOrder = this.plugin.getFolderOrder(this.plugin.settings.gridCols, normalizeFolderRef(folder));
     if (customOrder.length > 0) {
       const rank = new Map(customOrder.map((p, idx) => [p, idx]));
       folders.sort((a, b) => {
@@ -876,8 +933,8 @@ export class FolderBoardView extends ItemView {
       });
     }
 
-    // [ID 6.5.58] 직속 카드 포함 전체 카드 사용자 지정 순서 반영 (기존 folderOrder와 100% 하위 호환)
-    const customOrder = this.plugin.getFolderOrder(normalizeFolderRef(currentFolder));
+    // [ID 6.5.58] 직속 카드 포함 현재 레이아웃 모드별 독립 카드 순서 반영
+    const customOrder = this.plugin.getFolderOrder(this.plugin.settings.gridCols, normalizeFolderRef(currentFolder));
     if (customOrder.includes(ROOT_CARD_ORDER_KEY)) {
       const rank = new Map(customOrder.map((k, idx) => [k, idx]));
       const fallbackRank = new Map(cards.map((c, idx) => [this.getCardOrderKey(c), idx]));
@@ -1034,9 +1091,10 @@ export class FolderBoardView extends ItemView {
       this.sortBtnEl.empty();
       setIcon(this.sortBtnEl, nextSortIcon);
     }
-    this.sortBtnEl.setAttr("aria-label", s.sortBy === "name" ? "정렬: 이름순" : "정렬: 최근 수정순");
+    this.sortBtnEl.setAttr("aria-label", s.sortBy === "name" ? "파일 정렬: 이름순" : "파일 정렬: 최근 수정순");
 
     this.updateActionTooltipsOnly();
+    this.syncSidebarCollapseButtonState();
     this.syncPinButtonState();
     this.qlBtnEl.toggleClass("is-active", this.quickLookOpen);
   }
@@ -1076,40 +1134,155 @@ export class FolderBoardView extends ItemView {
     return Math.max(FLOW_COL_MIN_WIDTH, Math.min(Math.round(width), FLOW_COL_MAX_WIDTH));
   }
 
+  // [ID 6.5.64] Vertical/Horizontal 공용 12분할 카드 그리드 계산 · 드래그 리사이즈 · 플로팅 배지
+  // -> 가로 폭은 1~6열 분할(최소 160px), 세로 높이는 12단위 화면 분수(1/4~전체, 최소 150px)로 통일하고
+  // -> Vertical과 Horizontal은 넘쳤을 때 스크롤 방향(세로 vs 가로)만 다르게 동작하도록 일원화함.
+  private getCardGridColsSetting(): number {
+    const raw =
+      this.plugin.settings.gridCols === "horizontal"
+        ? this.plugin.settings.horizontalCols
+        : this.plugin.settings.verticalCols;
+    return Math.max(GRID_MIN_COLS, Math.min(GRID_MAX_COLS, Math.round(raw || 3)));
+  }
+
+  private setCardGridColsSetting(cols: number): void {
+    const clamped = Math.max(GRID_MIN_COLS, Math.min(GRID_MAX_COLS, Math.round(cols)));
+    if (this.plugin.settings.gridCols === "horizontal") {
+      this.plugin.settings.horizontalCols = clamped;
+    } else {
+      this.plugin.settings.verticalCols = clamped;
+    }
+  }
+
+  private getCardGridAvailWidth(): number {
+    return Math.max(GRID_CARD_MIN_WIDTH, (this.canvasEl?.clientWidth || 960) - GRID_CANVAS_PAD_X);
+  }
+
+  private getCardGridAvailHeight(): number {
+    return Math.max(320, (this.canvasEl?.clientHeight || 680) - GRID_CANVAS_PAD_Y);
+  }
+
+  private getCardGridMaxCols(availW: number): number {
+    return Math.min(
+      GRID_MAX_COLS,
+      Math.max(GRID_MIN_COLS, Math.floor((availW + GRID_GAP) / (GRID_CARD_MIN_WIDTH + GRID_GAP)))
+    );
+  }
+
+  private getEffectiveCardGridCols(availW: number): number {
+    const pref = this.getCardGridColsSetting();
+    return Math.max(GRID_MIN_COLS, Math.min(pref, this.getCardGridMaxCols(availW)));
+  }
+
+  private computeUnitRowHeight(availH: number): number {
+    return Math.max(12, (availH - (GRID_ROW_UNITS_TOTAL - 1) * GRID_GAP) / GRID_ROW_UNITS_TOTAL);
+  }
+
+  private getCardHeightForUnits(units: number, unitRowH: number): number {
+    return units * unitRowH + (units - 1) * GRID_GAP;
+  }
+
+  private getAllowedCardRowUnits(availH: number): number[] {
+    const unitRowH = this.computeUnitRowHeight(availH);
+    const allowed = GRID_ROW_SNAP_UNITS.filter(
+      (u) => this.getCardHeightForUnits(u, unitRowH) >= GRID_CARD_MIN_HEIGHT
+    );
+    return allowed.length > 0 ? [...allowed] : [GRID_ROW_UNITS_TOTAL];
+  }
+
+  private getActiveCardGridMode(): "vertical" | "horizontal" {
+    return this.plugin.settings.gridCols === "horizontal" ? "horizontal" : "vertical";
+  }
+
+  private resolveCardRowUnits(cardKey: string, cardCount: number): number {
+    const availH = this.getCardGridAvailHeight();
+    const allowed = this.getAllowedCardRowUnits(availH);
+    const saved = this.plugin.getCardRowUnits(this.getActiveCardGridMode(), cardKey);
+    if (saved !== null) {
+      const match = allowed.find((u) => u >= saved);
+      return match ?? allowed[allowed.length - 1];
+    }
+    const effectiveCols = this.getEffectiveCardGridCols(this.getCardGridAvailWidth());
+    const target = cardCount <= effectiveCols ? GRID_ROW_UNITS_TOTAL : 6;
+    const match = allowed.find((u) => u >= target);
+    return match ?? allowed[allowed.length - 1];
+  }
+
+  private formatCardRowUnitsLabel(units: number): string {
+    switch (units) {
+      case 3:
+        return "1/4 높이";
+      case 4:
+        return "1/3 높이";
+      case 6:
+        return "1/2 높이";
+      case 8:
+        return "2/3 높이";
+      case 9:
+        return "3/4 높이";
+      case 12:
+      default:
+        return "전체 높이";
+    }
+  }
+
+  private showResizeBadge(text: string, clientX: number, clientY: number): void {
+    if (!this.resizeBadgeEl) {
+      this.resizeBadgeEl = document.body.createDiv({ cls: "fb-resize-badge" });
+    }
+    this.resizeBadgeEl.textContent = text;
+    this.resizeBadgeEl.style.left = `${Math.round(clientX + 14)}px`;
+    this.resizeBadgeEl.style.top = `${Math.round(clientY - 26)}px`;
+  }
+
+  private hideResizeBadge(): void {
+    if (this.resizeBadgeEl) {
+      this.resizeBadgeEl.remove();
+      this.resizeBadgeEl = null;
+    }
+  }
+
+  private syncCardRowSpansInPlace(): void {
+    if (this.plugin.settings.gridCols === "flow") return;
+    const cardCount = this.renderedCards.length;
+    this.gridEl.querySelectorAll<HTMLElement>(".fb-card").forEach((cardEl) => {
+      const cardKey = cardEl.dataset.orderKey;
+      if (!cardKey) return;
+      const units = this.resolveCardRowUnits(cardKey, cardCount);
+      cardEl.style.setProperty("--fb-card-row-span", String(units));
+    });
+  }
+
   private applyGridLayoutClasses(cardCount: number): void {
     const prefLayout = this.plugin.settings.gridCols;
-    const isHorizontalCanvas = prefLayout === "scroll" || prefLayout === "flow";
+    const isHorizontalCanvas = prefLayout === "horizontal" || prefLayout === "flow";
     this.canvasEl.toggleClass("is-horizontal-scroll", isHorizontalCanvas);
 
-    if (prefLayout === "scroll") {
-      this.gridEl.style.removeProperty("--fb-flow-col-width");
-      this.gridEl.style.removeProperty("--fb-tall-span");
-      this.gridEl.className = "fb-grid fb-layout-scroll";
-    } else if (prefLayout === "flow") {
+    if (prefLayout === "flow") {
       const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
       this.gridEl.style.setProperty("--fb-flow-col-width", `${colW}px`);
-      this.gridEl.style.removeProperty("--fb-tall-span");
+      this.gridEl.style.removeProperty("--fb-grid-cols");
+      this.gridEl.style.removeProperty("--fb-grid-col-w");
+      this.gridEl.style.removeProperty("--fb-unit-row-h");
       this.gridEl.className = cardCount === 0 ? "fb-grid fb-layout-flow is-empty" : "fb-grid fb-layout-flow";
-    } else if (prefLayout === "auto") {
-      this.gridEl.style.removeProperty("--fb-flow-col-width");
-      // [ID 6.5.19] 세로 모드: 현재 폭 기준 예상 열 수를 계산해 1줄이면 세로 100%, 여러 줄이면 위아래 스크롤
-      const availWidth = Math.max(260, this.canvasEl.clientWidth - 28);
-      const estimatedCols = Math.max(1, Math.floor((availWidth + 10) / 270));
-      const rowClass = cardCount <= estimatedCols ? "fb-rows-1" : "fb-rows-auto";
-      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
-      const tallSpan = rowClass === "fb-rows-1" ? 1 : Math.max(2, Math.round((availH + 10) / 330));
-      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
-      this.gridEl.className = `fb-grid fb-layout-auto ${rowClass}`;
+      return;
+    }
+
+    this.gridEl.style.removeProperty("--fb-flow-col-width");
+    const availW = this.getCardGridAvailWidth();
+    const availH = this.getCardGridAvailHeight();
+    const effectiveCols = this.getEffectiveCardGridCols(availW);
+    const unitRowH = this.computeUnitRowHeight(availH);
+    const colW = Math.max(GRID_CARD_MIN_WIDTH, (availW - (effectiveCols - 1) * GRID_GAP) / effectiveCols);
+
+    this.gridEl.style.setProperty("--fb-grid-cols", String(effectiveCols));
+    this.gridEl.style.setProperty("--fb-grid-col-w", `${colW.toFixed(2)}px`);
+    this.gridEl.style.setProperty("--fb-unit-row-h", `${unitRowH.toFixed(3)}px`);
+
+    if (prefLayout === "horizontal") {
+      this.gridEl.className = "fb-grid fb-layout-horizontal";
     } else {
-      this.gridEl.style.removeProperty("--fb-flow-col-width");
-      const effectiveCols = Math.max(1, Math.min(prefLayout, Math.max(1, cardCount)));
-      const rowCount = Math.max(1, Math.ceil(cardCount / effectiveCols));
-      const rowClass = rowCount === 1 ? "fb-rows-1" : rowCount === 2 ? "fb-rows-2" : "fb-rows-many";
-      const availH = Math.max(360, this.canvasEl.clientHeight - 24);
-      const tallSpan =
-        rowClass === "fb-rows-1" ? 1 : rowClass === "fb-rows-2" ? 2 : Math.max(2, Math.round((availH + 10) / 350));
-      this.gridEl.style.setProperty("--fb-tall-span", String(tallSpan));
-      this.gridEl.className = `fb-grid fb-cols-${effectiveCols} ${rowClass}`;
+      this.gridEl.className = "fb-grid fb-layout-vertical";
     }
   }
 
@@ -1171,23 +1344,138 @@ export class FolderBoardView extends ItemView {
 
     if (isFlowMode) {
       this.lastCanvasHeight = this.canvasEl.clientHeight;
-      this.scheduleFlowColResizersSync();
-    } else {
-      this.colResizersEl?.empty();
     }
+    this.scheduleFlowColResizersSync();
   }
 
-  // [ID 6.5.46] 여러줄 모드 호버 전용 다단 너비 조절 바 동기화
-  // -> 고정 구분선(column-rule)을 제거하고 열 사이 여백에만 투명 히트존을 배치해 호버/드래그 시 조절 바가 나타나며,
-  // -> k번째 경계 드래그 시 dx/k 비율로 열 폭을 갱신해 핸들이 커서를 1:1로 추적하고 설정에 영속 저장함.
+  // [ID 6.5.46] Flow 다단 너비 조절 바 + Vertical/Horizontal 열 분할 드래그 바 통합 동기화
+  // -> 열 사이 여백에만 투명 히트존을 배치해 카드 스크롤바와 겹치지 않고,
+  // -> Flow는 픽셀 단위 폭, Vertical/Horizontal은 1~6열 분할 스냅 + 플로팅 배지로 직관 조절함.
   private scheduleFlowColResizersSync(): void {
     if (this.flowResizerRaf !== null) {
       window.cancelAnimationFrame(this.flowResizerRaf);
     }
     this.flowResizerRaf = window.requestAnimationFrame(() => {
       this.flowResizerRaf = null;
-      this.syncFlowColResizers();
+      if (this.plugin.settings.gridCols === "flow") {
+        this.syncFlowColResizers();
+      } else {
+        this.syncCardGridColResizers();
+      }
     });
+  }
+
+  private positionCardGridColResizer(handleEl: HTMLElement, colIndex: number, colWidth: number): void {
+    const gapCenter = FLOW_CANVAS_PAD_LEFT + colIndex * colWidth + (colIndex - 1) * GRID_GAP + GRID_GAP / 2;
+    handleEl.style.left = `${Math.round(gapCenter - 7)}px`;
+  }
+
+  private syncCardGridColResizers(): void {
+    if (!this.colResizersEl) return;
+    this.colResizersEl.empty();
+    const mode = this.plugin.settings.gridCols;
+    if ((mode !== "vertical" && mode !== "horizontal") || this.renderedCards.length === 0) return;
+
+    const availW = this.getCardGridAvailWidth();
+    const effectiveCols = this.getEffectiveCardGridCols(availW);
+    const colW = Math.max(GRID_CARD_MIN_WIDTH, (availW - (effectiveCols - 1) * GRID_GAP) / effectiveCols);
+    const gridRect = this.gridEl.getBoundingClientRect();
+
+    let numCols = effectiveCols;
+    if (mode === "horizontal") {
+      let maxRight = gridRect.left + colW;
+      this.gridEl.querySelectorAll<HTMLElement>(".fb-card").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > maxRight) maxRight = r.right;
+      });
+      const totalSpan = Math.max(colW, maxRight - gridRect.left);
+      numCols = Math.max(1, Math.round((totalSpan + GRID_GAP) / (colW + GRID_GAP)));
+    } else {
+      numCols = Math.max(1, Math.min(effectiveCols, this.renderedCards.length));
+    }
+
+    // 세로 스크롤 모드에서는 colResizersEl 높이를 그리드 전체 높이에 맞춰 아래쪽 카드 사이도 드래그 가능하게 함
+    const targetH = Math.max(this.canvasEl.clientHeight, this.gridEl.scrollHeight + GRID_CANVAS_PAD_Y);
+    this.colResizersEl.style.height = `${Math.round(targetH)}px`;
+
+    for (let k = 1; k <= numCols; k++) {
+      const handle = this.colResizersEl.createDiv({
+        cls: "fb-col-resizer",
+        attr: {
+          "data-col-index": String(k),
+          "aria-label": "가로 분할 수 조절 (좌우 드래그)"
+        }
+      });
+      this.positionCardGridColResizer(handle, k, colW);
+
+      handle.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const startX = e.clientX;
+        const startAvailW = this.getCardGridAvailWidth();
+        const maxCols = this.getCardGridMaxCols(startAvailW);
+        const startCols = this.getEffectiveCardGridCols(startAvailW);
+        const startColW = Math.max(
+          GRID_CARD_MIN_WIDTH,
+          (startAvailW - (startCols - 1) * GRID_GAP) / startCols
+        );
+        const handleLeft = FLOW_CANVAS_PAD_LEFT + k * startColW + (k - 1) * GRID_GAP;
+        const visualK = Math.max(
+          1,
+          Math.min(3, Math.round((handleLeft - this.canvasEl.scrollLeft) / (startColW + GRID_GAP)))
+        );
+
+        let latestCols = startCols;
+        handle.addClass("is-dragging");
+        document.body.style.cursor = "col-resize";
+        this.showResizeBadge(`${latestCols}열 분할`, e.clientX, e.clientY);
+
+        const allHandles = Array.from(this.colResizersEl.querySelectorAll<HTMLElement>(".fb-col-resizer"));
+
+        const onMove = (ev: PointerEvent) => {
+          const dx = ev.clientX - startX;
+          const desiredW = Math.max(GRID_CARD_MIN_WIDTH, startColW + dx / visualK);
+          const nextCols = Math.max(
+            GRID_MIN_COLS,
+            Math.min(maxCols, Math.round((startAvailW + GRID_GAP) / (desiredW + GRID_GAP)))
+          );
+          if (nextCols !== latestCols) {
+            latestCols = nextCols;
+            this.setCardGridColsSetting(latestCols);
+            this.applyGridLayoutClasses(this.renderedCards.length);
+            this.syncCardRowSpansInPlace();
+            const nextColW = Math.max(
+              GRID_CARD_MIN_WIDTH,
+              (startAvailW - (latestCols - 1) * GRID_GAP) / latestCols
+            );
+            for (const h of allHandles) {
+              const idx = Number(h.dataset.colIndex) || 1;
+              this.positionCardGridColResizer(h, idx, nextColW);
+            }
+          }
+          this.showResizeBadge(`${latestCols}열 분할`, ev.clientX, ev.clientY);
+        };
+
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          handle.removeClass("is-dragging");
+          document.body.style.cursor = "";
+          this.hideResizeBadge();
+
+          this.setCardGridColsSetting(latestCols);
+          void this.plugin.saveSettings();
+          this.scheduleFlowColResizersSync();
+        };
+
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
+      });
+    }
   }
 
   private positionFlowColResizer(handleEl: HTMLElement, colIndex: number, colWidth: number): void {
@@ -1198,6 +1486,7 @@ export class FolderBoardView extends ItemView {
   private syncFlowColResizers(): void {
     if (!this.colResizersEl) return;
     this.colResizersEl.empty();
+    this.colResizersEl.style.removeProperty("height");
     if (this.plugin.settings.gridCols !== "flow" || this.renderedCards.length === 0) return;
 
     const colW = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth);
@@ -1416,7 +1705,6 @@ export class FolderBoardView extends ItemView {
     const isScrollableWindow = isResizableFlowCard && cardModel.items.length > windowLimit;
 
     const cardKey = this.getCardOrderKey(cardModel);
-    const isTallGridCard = !isFlowMode && this.plugin.settings.gridCols !== "scroll" && this.plugin.isGridCardTall(cardKey);
 
     const cardEl = parentEl.createDiv({
       cls:
@@ -1424,7 +1712,6 @@ export class FolderBoardView extends ItemView {
         (cardModel.isRootCard ? " is-root-card" : "") +
         (cardModel.isRootCard && cardIdx > 0 ? " is-root-moved" : "") +
         (cardModel.isCollapsedSection ? " is-section-collapsed" : "") +
-        (isTallGridCard ? " is-card-tall" : "") +
         (isFocusedCard ? " is-focused-card" : "") +
         (isCarryCard ? " is-carry-target" : ""),
       attr: {
@@ -1434,6 +1721,11 @@ export class FolderBoardView extends ItemView {
         ...(isScrollableWindow ? { "data-windowed": "true" } : {})
       }
     });
+
+    if (!isFlowMode) {
+      const units = this.resolveCardRowUnits(cardKey, this.renderedCards.length);
+      cardEl.style.setProperty("--fb-card-row-span", String(units));
+    }
 
     // [ID 6.5.42] 가상 슬라이딩 윈도우 휠 스크롤 핸들러 -> 인플레이스 펼침 이후에도 그대로 동작하도록 카드 단위에 상시 바인딩
     if (isFlowMode) {
@@ -1622,26 +1914,83 @@ export class FolderBoardView extends ItemView {
 
     this.renderCardBodyAndFooter(cardEl, cardModel, cardIdx, isCarrying, isFlowMode);
 
-    // [ID 6.5.60] 카드 모드(2/3/4열 그리드 · 세로 모드) 하단 호버 기호 전용 세로 확장/축소 토글 (화면 1줄)
-    // -> DOM 재생성 없이 클래스와 아이콘만 인플레이스 토글해 깜박임 없이 원하는 카드만 화면 1줄 높이로 늘림.
-    if (!isFlowMode && this.plugin.settings.gridCols !== "scroll") {
-      const tallZone = cardEl.createDiv({ cls: "fb-card-tall-zone" });
-      const tallBtn = tallZone.createEl("button", {
-        cls: "fb-card-tall-btn",
-        attr: {
-          type: "button",
-          "aria-label": isTallGridCard ? "기본 크기로 축소" : "화면 1줄 높이로 확장"
-        }
+    // [ID 6.5.60] Vertical/Horizontal 공용 카드 하단 드래그 세로 분할 리사이저 (최소 150px 방어 · 더블클릭 1/2↔전체 토글)
+    // -> DOM 재생성 없이 --fb-card-row-span만 인플레이스 갱신해 60fps로 카드별 원하는 높이 분할을 조절함.
+    if (!isFlowMode) {
+      const resizeBottom = cardEl.createDiv({
+        cls: "fb-card-resize-bottom",
+        attr: { "aria-label": "카드 높이 조절 (상하 드래그 · 더블클릭 전체/기본)" }
       });
-      setIcon(tallBtn, isTallGridCard ? "chevrons-up" : "chevrons-down");
-      tallBtn.addEventListener("click", (e) => {
+
+      resizeBottom.addEventListener("dblclick", (e: MouseEvent) => {
+        e.preventDefault();
         e.stopPropagation();
-        const nextTall = !this.plugin.isGridCardTall(cardKey);
-        void this.plugin.toggleGridCardTall(cardKey);
-        cardEl.toggleClass("is-card-tall", nextTall);
-        tallBtn.empty();
-        setIcon(tallBtn, nextTall ? "chevrons-up" : "chevrons-down");
-        tallBtn.setAttr("aria-label", nextTall ? "기본 크기로 축소" : "화면 1줄 높이로 확장");
+        const curUnits = this.resolveCardRowUnits(cardKey, this.renderedCards.length);
+        const nextUnits = curUnits >= GRID_ROW_UNITS_TOTAL ? 6 : GRID_ROW_UNITS_TOTAL;
+        const allowed = this.getAllowedCardRowUnits(this.getCardGridAvailHeight());
+        const clamped = allowed.find((u) => u >= nextUnits) ?? allowed[allowed.length - 1];
+        cardEl.style.setProperty("--fb-card-row-span", String(clamped));
+        void this.plugin.setCardRowUnits(this.getActiveCardGridMode(), cardKey, clamped);
+        this.scheduleFlowColResizersSync();
+      });
+
+      resizeBottom.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const startY = e.clientY;
+        const startH = cardEl.getBoundingClientRect().height;
+        const availH = this.getCardGridAvailHeight();
+        const unitRowH = this.computeUnitRowHeight(availH);
+        const allowed = this.getAllowedCardRowUnits(availH);
+        let latestUnits = this.resolveCardRowUnits(cardKey, this.renderedCards.length);
+
+        resizeBottom.addClass("is-dragging");
+        cardEl.addClass("is-resizing");
+        document.body.style.cursor = "row-resize";
+        this.showResizeBadge(this.formatCardRowUnitsLabel(latestUnits), e.clientX, e.clientY);
+
+        const onMove = (ev: PointerEvent) => {
+          const dy = ev.clientY - startY;
+          const desiredH = Math.max(GRID_CARD_MIN_HEIGHT, startH + dy);
+          let bestUnit = allowed[0];
+          let bestDist = Infinity;
+          for (const u of allowed) {
+            const h = this.getCardHeightForUnits(u, unitRowH);
+            const dist = Math.abs(h - desiredH);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestUnit = u;
+            }
+          }
+          if (bestUnit !== latestUnits) {
+            latestUnits = bestUnit;
+            cardEl.style.setProperty("--fb-card-row-span", String(latestUnits));
+          }
+          const isAtMin = latestUnits === allowed[0] && startH + dy < GRID_CARD_MIN_HEIGHT;
+          const label = isAtMin
+            ? `${this.formatCardRowUnitsLabel(latestUnits)} (최소)`
+            : this.formatCardRowUnitsLabel(latestUnits);
+          this.showResizeBadge(label, ev.clientX, ev.clientY);
+        };
+
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          resizeBottom.removeClass("is-dragging");
+          cardEl.removeClass("is-resizing");
+          document.body.style.cursor = "";
+          this.hideResizeBadge();
+
+          void this.plugin.setCardRowUnits(this.getActiveCardGridMode(), cardKey, latestUnits);
+          this.scheduleFlowColResizersSync();
+        };
+
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
       });
     }
   }
@@ -2144,6 +2493,67 @@ export class FolderBoardView extends ItemView {
     }
   }
 
+  // [ID 6.5.63] 보드(Tab) ↔ 우측 분할 빠른 편집기(Esc) 원키 포커스 왕복
+  // -> 일반 마크다운 탭에는 일절 개입하지 않고 오직 quickEditLeaf 내부에서 오버레이/검색창/IME 조합이 없을 때만 Esc로 보드 복귀함.
+  private focusQuickEditLeaf(): void {
+    if (!this.isQuickEditLeafAlive() || !this.quickEditLeaf) return;
+    const targetLeaf = this.quickEditLeaf;
+    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+    this.syncScopeState();
+    requestAnimationFrame(() => {
+      const view = targetLeaf.view;
+      if (view instanceof MarkdownView && view.editor) {
+        view.editor.focus();
+      } else {
+        const cmContent = view?.containerEl?.querySelector<HTMLElement>(".cm-content");
+        if (cmContent) cmContent.focus();
+      }
+    });
+  }
+
+  private handleQuickEditEscKeydown(e: KeyboardEvent): void {
+    if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (!this.quickLookOpen || !this.isQuickEditLeafAlive() || !this.quickEditLeaf) return;
+    if (!this.containerEl.isConnected || this.containerEl.offsetParent === null) return;
+
+    // Vim 모드 사용자의 모드 전환 Esc 보호
+    const vaultConfig = (this.app.vault as unknown as { getConfig?: (k: string) => unknown }).getConfig;
+    if (vaultConfig && Boolean(vaultConfig.call(this.app.vault, "vimMode"))) return;
+
+    // 모달·자동완성·컨텍스트 메뉴·프롬프트가 열려 있으면 옵시디언 기본 Esc 닫기에 양보
+    if (document.querySelector(".modal-container, .suggestion-container, .menu, .prompt")) return;
+
+    const quickEl = this.quickEditLeaf.view?.containerEl;
+    if (!quickEl) return;
+
+    const targetNode = e.target instanceof Node ? e.target : document.activeElement;
+    if (targetNode instanceof HTMLElement && targetNode.closest(".document-search-container")) return;
+
+    const inQuickLeaf =
+      (targetNode instanceof Node && quickEl.contains(targetNode)) ||
+      (targetNode === document.body && this.app.workspace.getActiveViewOfType(ItemView)?.leaf === this.quickEditLeaf);
+    if (!inQuickLeaf) return;
+
+    // 텍스트 선택 또는 다중 커서 상태에서는 1차 Esc를 에디터 선택 해제에 양보
+    const quickView = this.quickEditLeaf.view;
+    if (quickView instanceof MarkdownView && quickView.editor) {
+      if (quickView.editor.somethingSelected()) return;
+      const selections = quickView.editor.listSelections?.();
+      if (selections && selections.length > 1) return;
+    }
+
+    this.handledKeyEvents.add(e);
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+    requestAnimationFrame(() => {
+      this.shellEl?.focus();
+      this.syncScopeState();
+    });
+  }
+
   // [ID 6.5.45] Space 네이티브 우측 분할 편집기 열기/교체/닫기
   // -> 옵시디언 공식 createLeafBySplit으로 진짜 편집기 탭 1개만 우측에 띄우고,
   // -> 방향키 이동 시 active: false로 내용만 교체해 보드 포커스를 유지하면서도 toggle-premium·라이브 프리뷰를 100% 살림.
@@ -2251,26 +2661,21 @@ export class FolderBoardView extends ItemView {
     requestAnimationFrame(() => {
       const isCarrying = this.carryPaths.length > 0;
       const activeCardIdx = isCarrying ? this.carryCardIndex : this.focusedCardIndex;
-      const lastCardIdx = this.renderedCards.length - 1;
 
-      if (this.plugin.settings.gridCols === "scroll") {
-        if (activeCardIdx <= 0) {
-          this.canvasEl.scrollLeft = 0;
-        } else if (activeCardIdx >= lastCardIdx) {
-          this.canvasEl.scrollLeft = this.canvasEl.scrollWidth;
-        } else {
-          const activeCardEl = this.gridEl.querySelector<HTMLElement>(
-            `.fb-card[data-card-index="${activeCardIdx}"]`
-          );
-          if (activeCardEl) {
-            const pad = 14;
-            const leftEdge = activeCardEl.offsetLeft - pad;
-            const rightEdge = activeCardEl.offsetLeft + activeCardEl.offsetWidth + pad;
-            if (leftEdge < this.canvasEl.scrollLeft) {
-              this.canvasEl.scrollLeft = Math.max(0, leftEdge);
-            } else if (rightEdge > this.canvasEl.scrollLeft + this.canvasEl.clientWidth) {
-              this.canvasEl.scrollLeft = rightEdge - this.canvasEl.clientWidth;
-            }
+      if (this.plugin.settings.gridCols === "horizontal") {
+        const activeCardEl = this.gridEl.querySelector<HTMLElement>(
+          `.fb-card[data-card-index="${activeCardIdx}"]`
+        );
+        if (activeCardEl) {
+          const pad = 14;
+          const leftEdge = activeCardEl.offsetLeft - pad;
+          const rightEdge = activeCardEl.offsetLeft + activeCardEl.offsetWidth + pad;
+          if (leftEdge <= pad) {
+            this.canvasEl.scrollLeft = 0;
+          } else if (leftEdge < this.canvasEl.scrollLeft) {
+            this.canvasEl.scrollLeft = Math.max(0, leftEdge);
+          } else if (rightEdge > this.canvasEl.scrollLeft + this.canvasEl.clientWidth) {
+            this.canvasEl.scrollLeft = rightEdge - this.canvasEl.clientWidth;
           }
         }
       } else if (this.plugin.settings.gridCols === "flow") {
@@ -2349,9 +2754,15 @@ export class FolderBoardView extends ItemView {
     this.focusCardItem(cardIdx, itemIdx, { clearSelection: true, updatePreview: true });
   }
 
-  // [ID 6.5.8] 노트 열기 (핀 고정 시 옵시디언 표준 getLeaf(false)로 옆 비고정 탭 재사용 / 미고정 시 동일 탭 히스토리 보존)
-  // -> 탭이 고정(Pinned)된 상태에서는 보드를 덮어쓰지 않고 옆 작업 탭에서 열어 탭 폭증을 막으면서 보드를 상시 유지함.
+  // [ID 6.5.8] 노트 열기 (미리보기 분할창 우선 정리 · 핀 고정 시 옆 비고정 탭 재사용 / 미고정 시 동일 탭 히스토리 보존)
+  // -> Space 미리보기가 열린 상태에서 Enter·더블클릭으로 노트에 진입하면 우측 분할 편집기를 먼저 닫아 분할 잔류를 방지하고,
+  // -> 탭이 고정(Pinned)된 상태에서는 보드를 덮어쓰지 않고 옆 작업 탭에서 열어 보드를 상시 유지함.
   private async openFile(file: TFile, forceNewTab = false): Promise<void> {
+    if (this.quickLookOpen || this.isQuickEditLeafAlive()) {
+      this.closeQuickEditLeaf(false);
+      this.updateToolbarStates();
+    }
+
     if (forceNewTab || this.plugin.settings.openBehavior === "new-tab") {
       const newLeaf = this.app.workspace.getLeaf("tab");
       await newLeaf.openFile(file, { active: true });
@@ -2587,7 +2998,6 @@ export class FolderBoardView extends ItemView {
       if (targets.length === 0) return;
 
       const stepToVerticalNeighborCard = (dir: "up" | "down"): boolean => {
-        if (mode === "scroll") return false;
         let probeIdx = this.carryCardIndex;
         for (let guard = 0; guard < this.renderedCards.length; guard++) {
           const neighborIdx = this.findVerticalNeighborCard(probeIdx, dir);
@@ -3389,7 +3799,7 @@ export class FolderBoardView extends ItemView {
     const insertIdx = position === "before" ? targetIdx : targetIdx + 1;
     allCardKeys.splice(insertIdx, 0, sourceKey);
 
-    await this.plugin.setFolderOrder(this.currentFolderPath, allCardKeys);
+    await this.plugin.setFolderOrder(this.plugin.settings.gridCols, this.currentFolderPath, allCardKeys);
     this.renderAll();
 
     const newCardIdx = this.renderedCards.findIndex((c) => this.getCardOrderKey(c) === sourceKey);
@@ -3401,6 +3811,122 @@ export class FolderBoardView extends ItemView {
         this.focusCardHeader(newCardIdx);
       }
     }
+  }
+
+  // [ID 6.5.66] 현재 레이아웃 모드의 폴더 순서를 1회성으로 깔끔하게 정리 (정렬 고정 없음 · 이후 즉시 수동 드래그 가능)
+  // -> 검색 필터 중에도 실제 전체 하위 폴더 기준으로 정렬해 누락 없이 현재 모드 버킷에만 반영함.
+  private getFolderRecursiveStats(folder: TFolder): { count: number; latestMtime: number } {
+    let count = 0;
+    let latestMtime = 0;
+    const walk = (f: TFolder) => {
+      for (const child of f.children) {
+        if (child instanceof TFile) {
+          count += 1;
+          if (child.stat.mtime > latestMtime) latestMtime = child.stat.mtime;
+        } else if (child instanceof TFolder) {
+          count += 1;
+          walk(child);
+        }
+      }
+    };
+    walk(folder);
+    return { count, latestMtime };
+  }
+
+  private pickAvailableIcon(candidates: string[], fallback = "list"): string {
+    for (const id of candidates) {
+      if (getIcon(id)) return id;
+    }
+    return fallback;
+  }
+
+  private openFolderSortMenu(anchorEl: HTMLElement): void {
+    const menu = new Menu();
+    menu.addItem((item) =>
+      item
+        .setTitle("폴더 이름순 (A → Z)")
+        .setIcon(this.pickAvailableIcon(["arrow-down-az", "arrow-down-a-z", "sort-asc", "arrow-down"]))
+        .onClick(() => {
+          void this.applyOneShotFolderSort("name-asc");
+        })
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("폴더 이름 역순 (Z → A)")
+        .setIcon(this.pickAvailableIcon(["arrow-up-za", "arrow-up-z-a", "sort-desc", "arrow-up"]))
+        .onClick(() => {
+          void this.applyOneShotFolderSort("name-desc");
+        })
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("항목 많은 순")
+        .setIcon(this.pickAvailableIcon(["arrow-down-wide-narrow", "bar-chart-2", "list-ordered", "hash"]))
+        .onClick(() => {
+          void this.applyOneShotFolderSort("count-desc");
+        })
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("최근 수정 순")
+        .setIcon(this.pickAvailableIcon(["clock", "history"]))
+        .onClick(() => {
+          void this.applyOneShotFolderSort("mtime-desc");
+        })
+    );
+
+    const rect = anchorEl.getBoundingClientRect();
+    menu.showAtPosition({ x: Math.round(rect.left), y: Math.round(rect.bottom + 4) });
+  }
+
+  private async applyOneShotFolderSort(
+    criterion: "name-asc" | "name-desc" | "count-desc" | "mtime-desc"
+  ): Promise<void> {
+    const mode = this.plugin.settings.gridCols;
+    const parentPath = this.currentFolderPath;
+
+    if (criterion === "name-asc") {
+      await this.plugin.clearFolderOrder(mode, parentPath);
+      this.renderAll();
+      return;
+    }
+
+    const currentFolder = parentPath ? getFolderByPath(this.app, parentPath) : this.app.vault.getRoot();
+    if (!currentFolder) return;
+
+    const childFolders = currentFolder.children.filter((c): c is TFolder => c instanceof TFolder);
+    const hasRootFiles = currentFolder.children.some((c) => c instanceof TFile);
+    const statsMap = new Map<string, { count: number; latestMtime: number }>();
+    if (criterion === "count-desc" || criterion === "mtime-desc") {
+      for (const f of childFolders) {
+        statsMap.set(f.path, this.getFolderRecursiveStats(f));
+      }
+    }
+
+    childFolders.sort((a, b) => {
+      if (criterion === "name-desc") {
+        return b.name.localeCompare(a.name, undefined, { numeric: true });
+      }
+      if (criterion === "count-desc") {
+        const ca = statsMap.get(a.path)?.count ?? 0;
+        const cb = statsMap.get(b.path)?.count ?? 0;
+        if (cb !== ca) return cb - ca;
+        return a.name.localeCompare(b.name, undefined, { numeric: true });
+      }
+      const ma = statsMap.get(a.path)?.latestMtime ?? 0;
+      const mb = statsMap.get(b.path)?.latestMtime ?? 0;
+      if (mb !== ma) return mb - ma;
+      return a.name.localeCompare(b.name, undefined, { numeric: true });
+    });
+
+    const orderedKeys: string[] = [];
+    if (hasRootFiles) orderedKeys.push(ROOT_CARD_ORDER_KEY);
+    for (const f of childFolders) {
+      orderedKeys.push(normalizeFolderRef(f));
+    }
+
+    await this.plugin.setFolderOrder(mode, parentPath, orderedKeys);
+    this.renderAll();
   }
 
   private async shiftFolderCardOrder(delta: -1 | 1): Promise<void> {
@@ -3418,7 +3944,7 @@ export class FolderBoardView extends ItemView {
     const [moved] = allCardKeys.splice(idx, 1);
     allCardKeys.splice(nextIdx, 0, moved);
 
-    await this.plugin.setFolderOrder(this.currentFolderPath, allCardKeys);
+    await this.plugin.setFolderOrder(this.plugin.settings.gridCols, this.currentFolderPath, allCardKeys);
     this.renderAll();
 
     const newCardIdx = this.renderedCards.findIndex((c) => this.getCardOrderKey(c) === moved);
@@ -3697,13 +4223,12 @@ export class FolderBoardView extends ItemView {
     return this.app.workspace.getActiveViewOfType(FolderBoardView) === this;
   }
 
-  // [ID 6.5.24] 2D 그리드 · 세로 · 여러줄 모드에서 동일 열의 바로 위·아래 카드/섹션 탐색
-  // -> getBoundingClientRect() 화면 좌표를 사용해 flex 컬럼(.fb-flow-col)과 grid 양쪽에서 동일 열만 정확히 매칭함.
+  // [ID 6.5.24] Vertical · Horizontal · Flow 모드에서 동일 열의 바로 위·아래 카드/섹션 탐색
+  // -> getBoundingClientRect() 화면 좌표를 사용해 세로·가로 스크롤 그리드 양쪽에서 동일 열 카드만 정확히 매칭함.
   private findVerticalNeighborCard(cardIdx: number, direction: "up" | "down"): number {
     if (this.plugin.settings.verticalEdgeBehavior !== "adaptive") return -1;
-    if (this.plugin.settings.gridCols === "scroll") return -1;
 
-    // 여러줄 연속 다단 모드에서는 폴더들이 끊김 없이 순차적으로 이어지므로 바로 다음/이전 폴더로 자연스럽게 연결
+    // Flow 연속 다단 모드에서는 폴더들이 끊김 없이 순차적으로 이어지므로 바로 다음/이전 폴더로 자연스럽게 연결
     if (this.plugin.settings.gridCols === "flow") {
       const next = cardIdx + (direction === "down" ? 1 : -1);
       return next >= 0 && next < this.renderedCards.length ? next : -1;
@@ -3733,6 +4258,41 @@ export class FolderBoardView extends ItemView {
 
       const rowDist = Math.abs(dy);
       if (rowDist < bestRowDist) {
+        bestRowDist = rowDist;
+        bestIdx = idx;
+      }
+    }
+
+    return bestIdx;
+  }
+
+  // [ID 6.5.65] Vertical/Horizontal 다단 카드 모드 공간 좌표 기반 좌/우 인접 카드 탐색
+  // -> Horizontal(column dense) 및 높이 가변 그리드에서도 인덱스 순서가 아닌 실제 시각적 좌/우 카드로 자연 이동함.
+  private findCardHorizontalNeighbor(cardIdx: number, direction: "left" | "right"): number {
+    const cardEls = Array.from(this.gridEl.querySelectorAll<HTMLElement>(".fb-card"));
+    const curEl = cardEls.find((el) => Number(el.dataset.cardIndex) === cardIdx);
+    if (!curEl) return -1;
+
+    const curRect = curEl.getBoundingClientRect();
+    const curCenterY = curRect.top + curRect.height / 2;
+    const colThreshold = 28;
+
+    let bestIdx = -1;
+    let bestColDist = Infinity;
+    let bestRowDist = Infinity;
+
+    for (const el of cardEls) {
+      const idx = Number(el.dataset.cardIndex);
+      if (idx === cardIdx) continue;
+      const r = el.getBoundingClientRect();
+      const dx = r.left - curRect.left;
+      if (direction === "right" && dx <= colThreshold) continue;
+      if (direction === "left" && dx >= -colThreshold) continue;
+
+      const colDist = Math.abs(dx);
+      const rowDist = Math.abs(r.top + r.height / 2 - curCenterY);
+      if (colDist < bestColDist - colThreshold || (Math.abs(colDist - bestColDist) <= colThreshold && rowDist < bestRowDist)) {
+        bestColDist = colDist;
         bestRowDist = rowDist;
         bestIdx = idx;
       }
@@ -4181,8 +4741,12 @@ export class FolderBoardView extends ItemView {
           }
         }
       }
+      const spatialCardIdx = this.findCardHorizontalNeighbor(this.focusedCardIndex, dir);
       const delta = dir === "right" ? 1 : -1;
-      const nextIdx = (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
+      const nextIdx =
+        spatialCardIdx >= 0
+          ? spatialCardIdx
+          : (this.focusedCardIndex + delta + this.renderedCards.length) % this.renderedCards.length;
       const targetCard = this.renderedCards[nextIdx];
       const firstFileIdx = targetCard.items.findIndex((it) => it.type === "file");
       this.focusCardItem(nextIdx, firstFileIdx >= 0 ? firstFileIdx : 0, {
@@ -4299,7 +4863,17 @@ export class FolderBoardView extends ItemView {
       return;
     }
 
-    // Space: 여러줄 모드 섹션 헤더면 섹션 접기/펼치기, 하위 폴더면 접기/펼치기, 파일이면 Quick Look 토글
+    // [ID 6.5.63] Tab: 우측 분할 빠른 편집기가 열려 있을 때 마우스 클릭 없이 즉시 편집기 커서 활성화
+    if (!meta && !e.altKey && !e.shiftKey && e.key === "Tab") {
+      if (this.quickLookOpen && this.isQuickEditLeafAlive()) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.focusQuickEditLeaf();
+      }
+      return;
+    }
+
+    // [ID 6.5.63] Space: 섹션/하위 폴더 접기·펼치기, 파일이면 1회차 미리보기 열기 → 2회차(또는 Tab) 우측 편집기 즉시 진입
     if (e.code === "Space") {
       e.preventDefault();
       e.stopPropagation();
@@ -4317,15 +4891,13 @@ export class FolderBoardView extends ItemView {
         this.toggleInlineSubfolderInPlace(this.focusedCardIndex, item.path);
       } else if (item?.type === "file") {
         const file = getFileByPath(this.app, item.path);
-        if (!this.quickLookOpen) {
+        if (!this.quickLookOpen || !this.isQuickEditLeafAlive()) {
           this.quickLookOpen = true;
           void this.updateQuickLook(file);
         } else if (this.quickLookPath !== item.path) {
           void this.updateQuickLook(file);
         } else {
-          this.quickLookOpen = false;
-          this.quickLookPath = null;
-          void this.updateQuickLook();
+          this.focusQuickEditLeaf();
         }
         this.updateToolbarStates();
       }

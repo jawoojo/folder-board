@@ -30,7 +30,8 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: "빠른 편집 & 접기/펼치기",
     items: [
-      { keys: ["Space"], desc: "파일: 우측 분할 편집기 토글 · 폴더: 접기/펼치기" },
+      { keys: ["Space"], desc: "파일: 1회 미리보기 · 2회 편집 진입 / 폴더: 접기·펼치기" },
+      { keys: ["Tab / Esc"], desc: "우측 편집기 커서 진입 / 보드로 복귀 (Esc 2회 닫기)" },
       { keys: ["["], desc: "포커스 폴더 하위 접기 (직속에서는 전체 접기)" },
       { keys: ["]"], desc: "포커스 폴더 하위 펼치기 (직속에서는 전체 펼치기)" },
       { keys: ["Esc"], desc: "선택 · 클립보드 · 들고 이동 · 분할 편집기 닫기" }
@@ -51,12 +52,13 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ]
   },
   {
-    title: "카드 순서 & 여러줄 레이아웃",
+    title: "카드 순서 & 레이아웃 드래그 분할",
     items: [
       { keys: ["Shift", "←/→"], desc: "카드 순서 이동 (폴더 헤더 · 직속 카드)" },
       { keys: ["헤더 드래그"], desc: "카드 순서 마우스 드래그 변경" },
-      { keys: ["하단 바 호버"], desc: "소(4) · 중(15) · 대(1열) 선택 및 최대 4열 드래그" },
-      { keys: ["열 사이 호버"], desc: "여러줄 모드 다단 너비 드래그 조절" }
+      { keys: ["열 사이 드래그"], desc: "Flow: 다단 너비 조절 · Vertical/Horizontal: 1~6열 분할" },
+      { keys: ["카드 하단 드래그"], desc: "Vertical/Horizontal: 카드 높이 분할(더블클릭 1/2↔전체)" },
+      { keys: ["Flow 하단 호버"], desc: "소(4) · 중(15) · 대(1열) 선택 및 최대 4열 드래그" }
     ]
   }
 ];
