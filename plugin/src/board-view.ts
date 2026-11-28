@@ -148,6 +148,7 @@ export class FolderBoardView extends ItemView {
   private canvasEl!: HTMLElement;
   private gridEl!: HTMLElement;
   private colResizersEl!: HTMLElement;
+  private flowVertIndicatorEl!: HTMLElement;
   private shelfEl!: HTMLElement;
   private shelfListEl!: HTMLElement;
   private shelfDropHereBtn!: HTMLButtonElement;
@@ -158,6 +159,12 @@ export class FolderBoardView extends ItemView {
   private vaultRefs: EventRef[] = [];
   private resizeObserver: ResizeObserver | null = null;
   private flowResizerRaf: number | null = null;
+  private flowWheelRaf: number | null = null;
+  private flowWheelPendingCards = new Set<number>();
+  private flowVertFadeTimer: number | null = null;
+  private flowVertActiveCardIdx: number | null = null;
+  private flowVertLastColX: number | null = null;
+  private hScrollFadeTimer: number | null = null;
   private resizeBadgeEl: HTMLElement | null = null;
   private lastCanvasHeight = 0;
   // [ID 6.5.32] 뷰 전용 Obsidian Scope -> 옵시디언 글로벌 Cmd+F/A/D 단축키보다 우선해 보드 활성 시 안전하게 가로챔
@@ -461,6 +468,19 @@ export class FolderBoardView extends ItemView {
       window.cancelAnimationFrame(this.flowResizerRaf);
       this.flowResizerRaf = null;
     }
+    if (this.flowWheelRaf !== null) {
+      window.cancelAnimationFrame(this.flowWheelRaf);
+      this.flowWheelRaf = null;
+    }
+    this.flowWheelPendingCards.clear();
+    if (this.flowVertFadeTimer !== null) {
+      window.clearTimeout(this.flowVertFadeTimer);
+      this.flowVertFadeTimer = null;
+    }
+    if (this.hScrollFadeTimer !== null) {
+      window.clearTimeout(this.hScrollFadeTimer);
+      this.hScrollFadeTimer = null;
+    }
     this.hideResizeBadge();
     this.contentEl.empty();
   }
@@ -624,6 +644,22 @@ export class FolderBoardView extends ItemView {
     this.canvasEl = body.createDiv({ cls: "fb-canvas" });
     this.gridEl = this.canvasEl.createDiv({ cls: "fb-grid" });
     this.colResizersEl = this.canvasEl.createDiv({ cls: "fb-col-resizers" });
+    this.flowVertIndicatorEl = this.canvasEl.createDiv({ cls: "fb-flow-vscroll-indicator" });
+
+    // [ID 6.5.68] 가로 스크롤 중일 때만 상시 예약된 7px 초슬림 스크롤바 썸을 은은하게 표시
+    this.canvasEl.addEventListener(
+      "scroll",
+      () => {
+        if (!this.canvasEl.hasClass("is-horizontal-scroll")) return;
+        this.canvasEl.addClass("is-hscrolling");
+        if (this.hScrollFadeTimer !== null) window.clearTimeout(this.hScrollFadeTimer);
+        this.hScrollFadeTimer = window.setTimeout(() => {
+          this.hScrollFadeTimer = null;
+          this.canvasEl?.removeClass("is-hscrolling");
+        }, 800);
+      },
+      { passive: true }
+    );
 
     // [ID 6.5.19] 창 크기 변경 시 Vertical/Horizontal 12분할 행 높이·열 폭·리사이즈 핸들 및 Flow 다단 동기화
     this.resizeObserver = new ResizeObserver(() => {
@@ -1325,6 +1361,7 @@ export class FolderBoardView extends ItemView {
 
   private renderGrid(cards: BoardCardModel[]): void {
     invalidateNativeIconCache();
+    this.hideFlowVertIndicator();
     this.gridEl.empty();
     this.applyGridLayoutClasses(cards.length);
 
@@ -1629,16 +1666,38 @@ export class FolderBoardView extends ItemView {
     else cardEl.removeAttribute("data-windowed");
 
     const offset = isScrollable ? this.getFlowWindowOffset(cardModel) : 0;
+    const endIdx = isScrollable ? Math.min(cardModel.items.length, offset + limit) : cardModel.items.length;
     const isCarrying = this.carryPaths.length > 0;
-    listEl.empty();
-    this.renderCardRows(
-      listEl,
-      cardModel,
-      cardIdx,
-      isCarrying,
-      offset,
-      isScrollable ? offset + limit : cardModel.items.length
-    );
+
+    // [ID 6.5.69] 증분 DOM 시프트 -> 1~4행 이동 시 기존 행·아이콘 DOM을 재사용하고 진입 행만 추가해 120fps 부드러운 스크롤 구현
+    const prevStart = listEl.dataset.winStart !== undefined ? Number(listEl.dataset.winStart) : NaN;
+    const prevEnd = listEl.dataset.winEnd !== undefined ? Number(listEl.dataset.winEnd) : NaN;
+    const delta = offset - prevStart;
+    const sameSpan =
+      Number.isFinite(prevStart) &&
+      Number.isFinite(prevEnd) &&
+      endIdx - offset === prevEnd - prevStart &&
+      listEl.children.length === prevEnd - prevStart;
+
+    if (sameSpan && delta > 0 && delta <= 4) {
+      for (let i = 0; i < delta; i++) {
+        listEl.firstElementChild?.remove();
+      }
+      this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, prevEnd, endIdx);
+    } else if (sameSpan && delta < 0 && delta >= -4) {
+      const count = -delta;
+      for (let i = 0; i < count; i++) {
+        listEl.lastElementChild?.remove();
+      }
+      const fragHost = document.createElement("div");
+      this.renderCardRows(fragHost, cardModel, cardIdx, isCarrying, offset, prevStart);
+      listEl.prepend(...Array.from(fragHost.children));
+    } else {
+      listEl.empty();
+      this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, offset, endIdx);
+    }
+    listEl.dataset.winStart = String(offset);
+    listEl.dataset.winEnd = String(endIdx);
 
     const countEl = cardEl.querySelector<HTMLElement>(".fb-count");
     if (countEl) {
@@ -1648,18 +1707,148 @@ export class FolderBoardView extends ItemView {
     const footerEl = cardEl.querySelector<HTMLElement>(".fb-flow-scroll-footer");
     footerEl?.toggleClass("is-unscrolled", !isScrollable);
 
-    const thumbEl = cardEl.querySelector<HTMLElement>(".fb-flow-scroll-thumb");
-    if (thumbEl) {
-      const total = cardModel.items.length;
-      if (isScrollable) {
-        const pctLeft = (offset / total) * 100;
-        const pctWidth = Math.max(8, (limit / total) * 100);
-        thumbEl.style.left = `${pctLeft}%`;
-        thumbEl.style.width = `${pctWidth}%`;
-      } else {
-        thumbEl.style.left = "0%";
-        thumbEl.style.width = "100%";
+    if (isScrollable) {
+      this.showFlowVertIndicator(cardIdx, true);
+    } else if (this.flowVertActiveCardIdx === cardIdx) {
+      this.hideFlowVertIndicator();
+    }
+  }
+
+  private scheduleFlowWheelCommit(cardIdx: number): void {
+    this.flowWheelPendingCards.add(cardIdx);
+    if (this.flowWheelRaf !== null) return;
+    this.flowWheelRaf = window.requestAnimationFrame(() => {
+      this.flowWheelRaf = null;
+      const batch = Array.from(this.flowWheelPendingCards);
+      this.flowWheelPendingCards.clear();
+      for (const idx of batch) {
+        this.updateFlowWindowDOM(idx);
       }
+    });
+  }
+
+  // [ID 6.5.67] Flow 모드 분할 열을 넘나드는 초슬림 세로 스크롤 인디케이터
+  // -> 서브-행 분수 오프셋(accum/stepPx)과 동일 열 transform 이징(열 이동 시 순간 점프)을 결합해 끊김 없이 부드럽게 이동함.
+  private hideFlowVertIndicator(): void {
+    if (this.flowVertFadeTimer !== null) {
+      window.clearTimeout(this.flowVertFadeTimer);
+      this.flowVertFadeTimer = null;
+    }
+    this.flowVertActiveCardIdx = null;
+    this.flowVertLastColX = null;
+    this.flowVertIndicatorEl?.removeClass("is-visible");
+    this.flowVertIndicatorEl?.removeClass("is-active");
+  }
+
+  private showFlowVertIndicator(cardIdx: number, isActiveScroll: boolean): void {
+    if (!this.flowVertIndicatorEl || this.plugin.settings.gridCols !== "flow") return;
+    const cardModel = this.renderedCards[cardIdx];
+    if (!cardModel || cardModel.isCollapsedSection) {
+      this.hideFlowVertIndicator();
+      return;
+    }
+    const limit = this.getFlowWindowLimit(cardModel);
+    const total = cardModel.items.length;
+    if (total <= limit) {
+      if (this.flowVertActiveCardIdx === cardIdx) this.hideFlowVertIndicator();
+      return;
+    }
+
+    const cardEl = this.gridEl.querySelector<HTMLElement>(`.fb-card[data-card-index="${cardIdx}"]`);
+    if (!cardEl) return;
+    const rows = Array.from(cardEl.querySelectorAll<HTMLElement>(".fb-row"));
+    if (rows.length === 0) return;
+
+    const canvasRect = this.canvasEl.getBoundingClientRect();
+    const scrollL = this.canvasEl.scrollLeft;
+    const scrollT = this.canvasEl.scrollTop;
+
+    // 다단(column-fill: auto)으로 쪼개진 행들을 열 단위 세그먼트로 묶음
+    const segments: Array<{ left: number; right: number; top: number; bottom: number; height: number }> = [];
+    for (const row of rows) {
+      const r = row.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      const prev = segments[segments.length - 1];
+      if (prev && Math.abs(r.left - prev.left) <= 18) {
+        prev.top = Math.min(prev.top, r.top);
+        prev.bottom = Math.max(prev.bottom, r.bottom);
+        prev.right = Math.max(prev.right, r.right);
+        prev.height = prev.bottom - prev.top;
+      } else {
+        segments.push({
+          left: r.left,
+          right: r.right,
+          top: r.top,
+          bottom: r.bottom,
+          height: r.height
+        });
+      }
+    }
+    if (segments.length === 0) return;
+
+    const totalTrackLen = segments.reduce((sum, s) => sum + s.height, 0);
+    const winKey = this.getFlowWindowKey(cardModel);
+    const offset = this.getFlowWindowOffset(cardModel);
+    const maxOffset = Math.max(1, total - limit);
+    const stepPx = Math.max(18, this.measureFlowRowHeight());
+    const subFrac = (this.flowWheelAccum.get(winKey) || 0) / stepPx;
+    const exactOffset = Math.max(0, Math.min(maxOffset, offset + subFrac));
+    const ratio = exactOffset / maxOffset;
+
+    const thumbH = Math.min(30, Math.max(18, Math.round(totalTrackLen * 0.16)));
+    let remaining = ratio * totalTrackLen;
+    let targetSeg = segments[segments.length - 1];
+    for (const seg of segments) {
+      if (remaining <= seg.height || seg === targetSeg) {
+        targetSeg = seg;
+        break;
+      }
+      remaining -= seg.height;
+    }
+
+    const localT = targetSeg.height > 0 ? Math.max(0, Math.min(1, remaining / targetSeg.height)) : 0;
+    const clampedThumbH = Math.min(thumbH, Math.max(12, Math.round(targetSeg.height - 2)));
+    const x = Math.round(targetSeg.right - canvasRect.left + scrollL + 2);
+    const y = Math.round(
+      targetSeg.top - canvasRect.top + scrollT + localT * Math.max(0, targetSeg.height - clampedThumbH)
+    );
+
+    const wasVisible = this.flowVertIndicatorEl.hasClass("is-visible");
+    const jumpedColumn =
+      !wasVisible ||
+      this.flowVertActiveCardIdx !== cardIdx ||
+      this.flowVertLastColX === null ||
+      Math.abs(x - this.flowVertLastColX) > 20;
+
+    this.flowVertActiveCardIdx = cardIdx;
+    this.flowVertLastColX = x;
+    this.flowVertIndicatorEl.style.height = `${clampedThumbH}px`;
+
+    if (jumpedColumn) {
+      // 첫 노출 또는 열을 건널 때는 대각선 비행을 막기 위해 transform만 즉시 점프
+      this.flowVertIndicatorEl.style.transition = "opacity 160ms ease, background-color 120ms ease";
+      this.flowVertIndicatorEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+      void this.flowVertIndicatorEl.offsetWidth;
+      this.flowVertIndicatorEl.style.removeProperty("transition");
+    } else {
+      this.flowVertIndicatorEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    }
+
+    this.flowVertIndicatorEl.addClass("is-visible");
+    this.flowVertIndicatorEl.toggleClass("is-active", isActiveScroll);
+
+    if (this.flowVertFadeTimer !== null) {
+      window.clearTimeout(this.flowVertFadeTimer);
+      this.flowVertFadeTimer = null;
+    }
+    if (isActiveScroll) {
+      this.flowVertFadeTimer = window.setTimeout(() => {
+        this.flowVertFadeTimer = null;
+        this.flowVertIndicatorEl?.removeClass("is-active");
+        this.flowVertIndicatorEl?.removeClass("is-visible");
+        this.flowVertActiveCardIdx = null;
+        this.flowVertLastColX = null;
+      }, 850);
     }
   }
 
@@ -1740,25 +1929,48 @@ export class FolderBoardView extends ItemView {
           e.preventDefault();
           e.stopPropagation();
 
-          const accum = (this.flowWheelAccum.get(winKey) || 0) + e.deltaY;
-          const stepPx = 24;
+          const stepPx = Math.max(18, this.measureFlowRowHeight());
+          const curOffset = this.getFlowWindowOffset(liveModel);
+          const maxOffset = Math.max(0, liveModel.items.length - curLimit);
+          let accum = (this.flowWheelAccum.get(winKey) || 0) + e.deltaY;
+
+          // 최상단·최하단 경계에서는 잔여 누적값을 즉시 0으로 정리해 역방향 스크롤 데드존 제거
+          if ((curOffset <= 0 && accum < 0) || (curOffset >= maxOffset && accum > 0)) {
+            accum = 0;
+          }
+
           const rowSteps = Math.trunc(accum / stepPx);
           if (rowSteps === 0) {
             this.flowWheelAccum.set(winKey, accum);
+            this.showFlowVertIndicator(cardIdx, true);
             return;
           }
-          this.flowWheelAccum.set(winKey, accum - rowSteps * stepPx);
 
-          const curOffset = this.getFlowWindowOffset(liveModel);
-          const maxOffset = Math.max(0, liveModel.items.length - curLimit);
           const nextOffset = Math.max(0, Math.min(curOffset + rowSteps, maxOffset));
+          const remainder = nextOffset === 0 || nextOffset === maxOffset ? 0 : accum - rowSteps * stepPx;
+          this.flowWheelAccum.set(winKey, remainder);
+
           if (nextOffset !== curOffset) {
             this.flowScrollOffsets.set(winKey, nextOffset);
-            this.updateFlowWindowDOM(cardIdx);
+            this.scheduleFlowWheelCommit(cardIdx);
           }
+          this.showFlowVertIndicator(cardIdx, true);
         },
         { passive: false }
       );
+
+      cardEl.addEventListener("pointerenter", () => {
+        const liveModel = this.renderedCards[cardIdx];
+        if (!liveModel || liveModel.isCollapsedSection) return;
+        if (liveModel.items.length > this.getFlowWindowLimit(liveModel)) {
+          this.showFlowVertIndicator(cardIdx, false);
+        }
+      });
+      cardEl.addEventListener("pointerleave", () => {
+        if (this.flowVertActiveCardIdx === cardIdx && this.flowVertFadeTimer === null) {
+          this.hideFlowVertIndicator();
+        }
+      });
     }
 
     // [ID 6.5.38 / 6.5.58] 직속 카드 헤더 정책
@@ -2039,24 +2251,15 @@ export class FolderBoardView extends ItemView {
     const startIdx = isScrollableWindow ? this.getFlowWindowOffset(cardModel) : 0;
     const endIdx = isScrollableWindow ? Math.min(cardModel.items.length, startIdx + windowLimit) : cardModel.items.length;
     this.renderCardRows(listEl, cardModel, cardIdx, isCarrying, startIdx, endIdx);
+    listEl.dataset.winStart = String(startIdx);
+    listEl.dataset.winEnd = String(endIdx);
 
-    // [ID 6.5.48] 하단 스크롤바 호버 소·중·대 크기 선택 + 상하 드래그 실시간 리사이징
-    // -> 소(4개)·중(기본 15개)·대(1열 꽉차게) 프리셋과 드래그 자유 조절을 모두 지원하며 폴더별로 기억함.
+    // [ID 6.5.48] Flow 하단 투명 호버 존 -> 평소 선 없이 깨끗하게 유지, 호버 시 소·중·대 선택 + 상하·다단 드래그 지원
     if (isResizableFlowCard) {
       const footer = cardEl.createDiv({
         cls: "fb-flow-scroll-footer" + (isScrollableWindow ? "" : " is-unscrolled"),
         attr: { "aria-label": "드래그로 길이 조절 또는 소/중/대 선택" }
       });
-      const track = footer.createDiv({ cls: "fb-flow-scroll-track" });
-      const thumb = track.createDiv({ cls: "fb-flow-scroll-thumb" });
-      const total = cardModel.items.length;
-      if (isScrollableWindow) {
-        thumb.style.left = `${(startIdx / total) * 100}%`;
-        thumb.style.width = `${Math.max(8, (windowLimit / total) * 100)}%`;
-      } else {
-        thumb.style.left = "0%";
-        thumb.style.width = "100%";
-      }
 
       const sizeBar = footer.createDiv({ cls: "fb-flow-size-bar" });
       // [ID 6.5.53] 호버 선택바 좌측 상하 드래그 손잡이(↕) -> 드래그 리사이징 가능성을 직관적으로 안내

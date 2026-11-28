@@ -186,10 +186,30 @@
   flex-direction: column;
 }
 
-/* [ID 6.7.2] 가로 스크롤 캔버스 (Flow · Horizontal 모드 공용) */
+/* [ID 6.7.2] 가로 스크롤 캔버스 (Flow · Horizontal 모드 공용)
+   -> overflow-x: scroll + 7px 초슬림 커스텀 스크롤바로 하단 높이를 상시 고정 예약해
+   -> Space 편집창 오픈이나 폴더 증가로 가로 스크롤이 생겨도 높이가 0px도 안 변해 옆 열 파일 밀림을 원천 차단함. */
 .fb-canvas.is-horizontal-scroll {
-  overflow-x: auto;
+  overflow-x: scroll;
   overflow-y: hidden;
+  padding-bottom: 6px;
+}
+.fb-canvas.is-horizontal-scroll::-webkit-scrollbar {
+  height: 7px !important;
+}
+.fb-canvas.is-horizontal-scroll::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+.fb-canvas.is-horizontal-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent !important;
+  border-radius: 99px;
+}
+.fb-canvas.is-horizontal-scroll:hover::-webkit-scrollbar-thumb,
+.fb-canvas.is-horizontal-scroll.is-hscrolling::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--text-normal) 22%, transparent) !important;
+}
+.fb-canvas.is-horizontal-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-normal) 40%, transparent) !important;
 }
 
 .fb-grid {
@@ -495,41 +515,37 @@
   text-align: left;
 }
 
-/* [ID 6.7.10] 여러줄 모드 하단 2px 스크롤바 + 호버 드래그 핸들(↕)·소·중·대 선택바 (레이아웃 튐 0) */
+/* [ID 6.7.10] Flow 하단 투명 호버 존(드래그·소·중·대) + 열을 넘나드는 초슬림 세로 스크롤 인디케이터 */
 .fb-flow-scroll-footer {
   position: relative;
-  padding: 6px 6px 4px 19px;
+  height: 10px;
+  padding: 0;
   cursor: ns-resize;
   break-before: avoid;
   -webkit-column-break-before: avoid;
 }
-.fb-card.is-root-card .fb-flow-scroll-footer {
-  padding-left: 4px;
-}
-.fb-flow-scroll-track {
-  position: relative;
-  height: 2px;
-  border-radius: 99px;
-  background-color: color-mix(in srgb, var(--text-normal) 10%, transparent);
-  overflow: hidden;
-  transition: opacity 120ms ease, background-color 120ms ease;
-}
-.fb-flow-scroll-footer.is-unscrolled .fb-flow-scroll-track {
-  opacity: 0;
-}
-.fb-flow-scroll-footer.is-resizing .fb-flow-scroll-track {
-  opacity: 0.7;
-}
-.fb-flow-scroll-thumb {
+.fb-flow-vscroll-indicator {
   position: absolute;
   top: 0;
-  bottom: 0;
+  left: 0;
+  width: 2.5px;
+  height: 26px;
   border-radius: 99px;
-  background-color: color-mix(in srgb, var(--text-normal) 38%, transparent);
-  transition: left 60ms linear, width 60ms linear, background-color 120ms ease;
+  background-color: color-mix(in srgb, var(--text-normal) 32%, transparent);
+  pointer-events: none;
+  z-index: 9;
+  opacity: 0;
+  will-change: transform, opacity;
+  transition:
+    transform 85ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease,
+    background-color 120ms ease;
 }
-.fb-flow-scroll-footer.is-resizing .fb-flow-scroll-thumb {
-  background-color: var(--interactive-accent);
+.fb-flow-vscroll-indicator.is-visible {
+  opacity: 1;
+}
+.fb-flow-vscroll-indicator.is-active {
+  background-color: color-mix(in srgb, var(--text-normal) 56%, transparent);
 }
 
 .fb-flow-size-bar {
