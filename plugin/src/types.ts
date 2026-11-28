@@ -5,9 +5,11 @@ export type SortMode = "name" | "mtime";
 export type OpenBehavior = "same-tab" | "new-tab";
 export type LayoutColumns = "flow" | "vertical" | "horizontal";
 export type VerticalEdgeBehavior = "adaptive" | "loop";
+export type LanguageMode = "auto" | "en" | "ko";
 export type FlowWindowSizeSpec = "sm" | "md" | "lg" | number;
 
 export interface FolderBoardSettings {
+  languageMode: LanguageMode;
   gridCols: LayoutColumns;
   sortBy: SortMode;
   openBehavior: OpenBehavior;
@@ -38,6 +40,7 @@ export interface FolderBoardSettings {
 }
 
 export const DEFAULT_SETTINGS: FolderBoardSettings = {
+  languageMode: "auto",
   gridCols: "flow",
   sortBy: "name",
   openBehavior: "same-tab",
@@ -48,7 +51,7 @@ export const DEFAULT_SETTINGS: FolderBoardSettings = {
   flowWindowSizes: {},
   flowColumnWidth: 270,
   quickLookSplitRatio: 0.4,
-  openCommandAlias: "폴더 보드 열기",
+  openCommandAlias: "",
   verticalCols: 3,
   horizontalCols: 3,
   cardRowUnitsByMode: { vertical: {}, horizontal: {} },

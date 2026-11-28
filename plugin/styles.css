@@ -324,15 +324,11 @@
   transition: background-color 140ms ease, border-color 140ms ease;
 }
 
+/* [ID 6.7.15] Flow 모드 순수 다단 트리 — 클릭/키보드 포커스 카드만 은은하게 강조 (카드 마우스 호버 제거로 포커스 혼동 방지) */
 .fb-layout-flow .fb-card:not(.is-root-card) {
   background-color: transparent;
   border: 1px solid transparent;
   padding: 3px 5px 5px;
-}
-
-.fb-layout-flow .fb-card:not(.is-root-card):hover {
-  background-color: color-mix(in srgb, var(--background-secondary) 52%, transparent);
-  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 65%, transparent);
 }
 
 .fb-layout-flow .fb-card:not(.is-root-card).is-focused-card {
@@ -345,10 +341,6 @@
   background-color: transparent;
   border: 1px solid transparent;
   padding: 3px 5px 5px;
-}
-.fb-layout-flow .fb-card.is-root-card.is-root-moved:hover {
-  background-color: color-mix(in srgb, var(--background-secondary) 52%, transparent);
-  border-color: color-mix(in srgb, var(--divider-color, var(--background-modifier-border)) 65%, transparent);
 }
 .fb-layout-flow .fb-card.is-root-card.is-root-moved.is-focused-card {
   background-color: color-mix(in srgb, var(--background-secondary) 68%, transparent);
@@ -493,7 +485,6 @@
   overflow: visible;
   transition: border-left-color 140ms ease;
 }
-.fb-layout-flow .fb-card:not(.is-root-card):hover .fb-card-body.nav-files-container,
 .fb-layout-flow .fb-card:not(.is-root-card).is-focused-card .fb-card-body.nav-files-container {
   border-left-color: var(--nav-indentation-guide-color, var(--background-modifier-border));
 }
@@ -515,14 +506,23 @@
   text-align: left;
 }
 
-/* [ID 6.7.10] Flow 하단 투명 호버 존(드래그·소·중·대) + 열을 넘나드는 초슬림 세로 스크롤 인디케이터 */
+/* [ID 6.7.10] Flow 하단 0px 무간섭 호버 존(다음 열 밀림 방지) + 열을 넘나드는 초슬림 세로 스크롤 인디케이터 */
 .fb-flow-scroll-footer {
   position: relative;
-  height: 10px;
+  height: 0;
   padding: 0;
+  overflow: visible;
   cursor: ns-resize;
   break-before: avoid;
   -webkit-column-break-before: avoid;
+}
+.fb-flow-scroll-footer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  height: 16px;
 }
 .fb-flow-vscroll-indicator {
   position: absolute;
@@ -551,8 +551,9 @@
 .fb-flow-size-bar {
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%) scale(0.95);
+  bottom: -2px;
+  transform: translateX(-50%) scale(0.95);
+  transform-origin: bottom center;
   display: inline-flex;
   align-items: center;
   gap: 1px;
@@ -560,11 +561,11 @@
   border-radius: 99px;
   border: 1px solid var(--background-modifier-border-hover);
   background-color: var(--background-primary);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
   opacity: 0;
   pointer-events: none;
   transition: opacity 130ms ease, transform 130ms ease;
-  z-index: 5;
+  z-index: 6;
 }
 .fb-flow-drag-handle {
   display: inline-flex;
@@ -616,21 +617,18 @@
   font-weight: 600 !important;
 }
 
-.fb-flow-scroll-footer:hover:not(.is-resizing) .fb-flow-scroll-track {
-  opacity: 0.25;
-}
 .fb-flow-scroll-footer:hover:not(.is-resizing) .fb-flow-size-bar,
 .fb-flow-size-bar:focus-within {
   opacity: 1;
   pointer-events: auto;
-  transform: translate(-50%, -50%) scale(1);
+  transform: translateX(-50%) scale(1);
 }
 
 .fb-flow-drag-badge {
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  bottom: -2px;
+  transform: translateX(-50%);
   display: none;
   padding: 2px 8px;
   border-radius: 99px;
@@ -716,10 +714,6 @@
   font-weight: 600;
   color: var(--text-normal);
   white-space: nowrap;
-}
-
-.fb-card:hover {
-  border-color: var(--background-modifier-border-hover);
 }
 
 .fb-card.is-focused-card {

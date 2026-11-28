@@ -2,8 +2,15 @@
 // -> ItemView 등록, 리본/커맨드, 설정 탭, 영속 펼침·접힘 상태 및 사용자 지정 폴더 순서를 관리함.
 import { Command, Plugin, WorkspaceLeaf, WorkspaceSidedock, setIcon } from "obsidian";
 import { FolderBoardView, VIEW_TYPE_FOLDER_BOARD } from "./board-view";
+import { i18n, isKoreanLocale, setLanguageMode } from "./i18n";
 import { FolderBoardSettingTab } from "./settings";
-import { DEFAULT_SETTINGS, type FlowWindowSizeSpec, type FolderBoardSettings, type LayoutColumns } from "./types";
+import {
+  DEFAULT_SETTINGS,
+  type FlowWindowSizeSpec,
+  type FolderBoardSettings,
+  type LanguageMode,
+  type LayoutColumns
+} from "./types";
 
 export default class FolderBoardPlugin extends Plugin {
   settings: FolderBoardSettings = { ...DEFAULT_SETTINGS };
@@ -166,7 +173,7 @@ export default class FolderBoardPlugin extends Plugin {
 
       const btn = buttonsEl.createDiv({
         cls: "clickable-icon nav-action-button fb-explorer-launch-btn",
-        attr: { "aria-label": "Folder Board 열기 (⌘/Ctrl+클릭: 현재 폴더)" }
+        attr: { "aria-label": i18n.explorerLaunchAria() }
       });
       setIcon(btn, "layout-grid");
       btn.addEventListener("click", (e: MouseEvent) => {
@@ -187,15 +194,21 @@ export default class FolderBoardPlugin extends Plugin {
     document.querySelectorAll(".fb-explorer-launch-btn").forEach((el) => el.remove());
   }
 
-  // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 즉시 반영 (핫키 ID 보존)
-  // -> 한글 등 원하는 검색 문구를 추가해 한영 전환 없이 Cmd+P에서 바로 폴더 보드를 열 수 있게 함.
+  // [ID 6.6.9] 커맨드 팔레트(Cmd+P) 사용자 지정 문구 및 언어 즉시 반영 (핫키 ID 보존)
+  // -> 한국어 환경에서는 기본 한글 별칭("폴더 보드 열기")을 자동 부가하고, 영문 환경에서는 깔끔한 영문 라벨을 표시함.
   private buildOpenCommandLabel(inCurrentFolder: boolean): string {
-    const alias = (this.settings.openCommandAlias || "").trim();
+    const rawAlias = (this.settings.openCommandAlias || "").trim();
+    const effectiveAlias = rawAlias
+      ? !isKoreanLocale() && rawAlias === "폴더 보드 열기"
+        ? ""
+        : rawAlias
+      : i18n.defaultCommandAlias();
+
     if (!inCurrentFolder) {
-      return alias ? `Open 2D Folder Board · ${alias}` : "Open 2D Folder Board";
+      return effectiveAlias ? `Open 2D Folder Board · ${effectiveAlias}` : "Open 2D Folder Board";
     }
-    return alias
-      ? `Open 2D Folder Board in current folder · ${alias} (현재 폴더)`
+    return effectiveAlias
+      ? `Open 2D Folder Board in current folder · ${effectiveAlias} (${i18n.currentFolderSuffix()})`
       : "Open 2D Folder Board in current folder";
   }
 
@@ -206,6 +219,23 @@ export default class FolderBoardPlugin extends Plugin {
     }
     if (this.openBoardHereCmd) {
       this.openBoardHereCmd.name = `${prefix}${this.buildOpenCommandLabel(true)}`;
+    }
+  }
+
+  // [ID 6.6.16] 언어 설정 변경 시 재시작 없이 명령어·탐색기 버튼·열린 보드 뷰 일괄 갱신
+  async setLanguageModeSetting(mode: LanguageMode): Promise<void> {
+    this.settings.languageMode = mode;
+    setLanguageMode(mode);
+    await this.saveSettings();
+    this.syncCommandNames();
+    document.querySelectorAll<HTMLElement>(".fb-explorer-launch-btn").forEach((el) => {
+      el.setAttr("aria-label", i18n.explorerLaunchAria());
+    });
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_FOLDER_BOARD)) {
+      if (leaf.view instanceof FolderBoardView) {
+        leaf.view.syncLocaleLabels();
+        leaf.view.refresh();
+      }
     }
   }
 
@@ -383,6 +413,15 @@ export default class FolderBoardPlugin extends Plugin {
       }
       delete this.settings.expandedFlowWindows;
     }
+    if (
+      this.settings.languageMode !== "auto" &&
+      this.settings.languageMode !== "en" &&
+      this.settings.languageMode !== "ko"
+    ) {
+      this.settings.languageMode = DEFAULT_SETTINGS.languageMode;
+    }
+    setLanguageMode(this.settings.languageMode);
+
     if (typeof this.settings.openCommandAlias !== "string") {
       this.settings.openCommandAlias = DEFAULT_SETTINGS.openCommandAlias;
     }

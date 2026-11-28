@@ -2,6 +2,7 @@
 // -> 기본 file-explorer의 커스텀 아이콘/색상을 복제하고,
 // -> file-menu 이벤트를 트리거해 새 노트·새 폴더·새 캔버스·새 베이스 및 향후 코어/커뮤니티 생성 메뉴를 자동 연동함.
 import { App, Menu, Notice, TAbstractFile, TFile, TFolder, WorkspaceLeaf, setIcon } from "obsidian";
+import { i18n } from "./i18n";
 
 interface NativeFileItem {
   selfEl?: HTMLElement;
@@ -578,7 +579,7 @@ export function openNativeFileMenu(
 
     menu.addItem((item) =>
       item
-        .setTitle("새 노트")
+        .setTitle(i18n.newNote())
         .setIcon("file-plus")
         .setSection("action-primary")
         .onClick(() => cb.onRequestCreateNote(folderPath))
@@ -586,7 +587,7 @@ export function openNativeFileMenu(
 
     menu.addItem((item) =>
       item
-        .setTitle("새 폴더")
+        .setTitle(i18n.newFolder())
         .setIcon("folder-plus")
         .setSection("action-primary")
         .onClick(() => cb.onRequestCreateFolder(folderPath))
@@ -595,7 +596,7 @@ export function openNativeFileMenu(
     if (!target.isRoot()) {
       menu.addItem((item) =>
         item
-          .setTitle("이름 바꾸기")
+          .setTitle(i18n.rename())
           .setIcon("pencil")
           .setSection("danger")
           .onClick(() => cb.onRequestRename(target))
@@ -603,7 +604,7 @@ export function openNativeFileMenu(
 
       menu.addItem((item) =>
         item
-          .setTitle("삭제")
+          .setTitle(i18n.delete())
           .setIcon("trash")
           .setSection("danger")
           .setWarning(true)
@@ -612,7 +613,7 @@ export function openNativeFileMenu(
               await app.vault.trash(target, true);
               cb.onMutated();
             } catch (err) {
-              new Notice(`삭제 실패: ${err instanceof Error ? err.message : String(err)}`);
+              new Notice(i18n.deleteFailed(err instanceof Error ? err.message : String(err)));
             }
           })
       );
@@ -620,7 +621,7 @@ export function openNativeFileMenu(
   } else if (target instanceof TFile) {
     menu.addItem((item) =>
       item
-        .setTitle("새 탭에서 열기")
+        .setTitle(i18n.openInNewTab())
         .setIcon("file-plus")
         .setSection("open")
         .onClick(async () => {
@@ -630,7 +631,7 @@ export function openNativeFileMenu(
 
     menu.addItem((item) =>
       item
-        .setTitle("이름 바꾸기")
+        .setTitle(i18n.rename())
         .setIcon("pencil")
         .setSection("danger")
         .onClick(() => cb.onRequestRename(target))
@@ -638,7 +639,7 @@ export function openNativeFileMenu(
 
     menu.addItem((item) =>
       item
-        .setTitle("삭제")
+        .setTitle(i18n.delete())
         .setIcon("trash")
         .setSection("danger")
         .setWarning(true)
@@ -647,7 +648,7 @@ export function openNativeFileMenu(
             await app.vault.trash(target, true);
             cb.onMutated();
           } catch (err) {
-            new Notice(`삭제 실패: ${err instanceof Error ? err.message : String(err)}`);
+            new Notice(i18n.deleteFailed(err instanceof Error ? err.message : String(err)));
           }
         })
     );

@@ -16,6 +16,7 @@ import {
   normalizePath,
   setIcon
 } from "obsidian";
+import { i18n } from "./i18n";
 import type FolderBoardPlugin from "./main";
 import { NamePromptModal } from "./name-modal";
 import { ShortcutHelpModal } from "./shortcuts";
@@ -36,6 +37,7 @@ const ROOT_CARD_ORDER_KEY = "__root__";
 const FLOW_SIZE_SM = 4;
 const FLOW_WINDOW_SIZE = 15;
 const FLOW_MAX_DRAG_COLS = 4;
+const FLOW_MAX_DRAG_ROWS = 200;
 const FLOW_COL_GAP = 24;
 const FLOW_CANVAS_PAD_LEFT = 14;
 const FLOW_COL_MIN_WIDTH = 180;
@@ -260,12 +262,7 @@ export class FolderBoardView extends ItemView {
     if (!this.pinBtnEl) return;
     const pinned = this.isLeafPinned();
     this.pinBtnEl.toggleClass("is-active", pinned);
-    this.pinBtnEl.setAttr(
-      "aria-label",
-      pinned
-        ? "탭 고정됨 — 노트 열 때 옆 탭에서 열림 (클릭해 해제)"
-        : "탭 고정 (Pin) — 보드를 유지한 채 옆 탭에서 노트 열기"
-    );
+    this.pinBtnEl.setAttr("aria-label", pinned ? i18n.pinTabOnAria() : i18n.pinTabOffAria());
   }
 
   syncSidebarCollapseButtonState(): void {
@@ -274,10 +271,36 @@ export class FolderBoardView extends ItemView {
     this.sidebarAutoCollapseBtnEl.toggleClass("is-active", enabled);
     this.sidebarAutoCollapseBtnEl.setAttr(
       "aria-label",
-      enabled
-        ? "좌측 패널 자동 접기 켜짐 — 보드에서만 접고 나가면 복원 (클릭해 끄기)"
-        : "폴더 보드에서 좌측 패널 자동 접기 켜기"
+      enabled ? i18n.autoCollapseSidebarOnAria() : i18n.autoCollapseSidebarOffAria()
     );
+  }
+
+  // [ID 6.5.70] 언어 설정 변경 시 상단 고정 툴바·검색창·바구니 라벨 즉시 동기화
+  syncLocaleLabels(): void {
+    this.backBtnEl?.setAttr("aria-label", i18n.parentFolderAria());
+    if (this.searchInputEl) this.searchInputEl.placeholder = i18n.searchPlaceholder();
+    this.clearSearchEl?.setAttr("aria-label", i18n.clearSearchAria());
+    for (const { value, el } of this.layoutBtns) {
+      el.setAttr(
+        "aria-label",
+        value === "flow"
+          ? i18n.layoutFlowAria()
+          : value === "vertical"
+            ? i18n.layoutVerticalAria()
+            : i18n.layoutHorizontalAria()
+      );
+    }
+    this.folderSortBtnEl?.setAttr("aria-label", i18n.folderSortAria());
+    this.qlBtnEl?.setAttr("aria-label", i18n.quickEditAria());
+    if (this.shelfDropHereBtn) this.shelfDropHereBtn.setText(i18n.move());
+    this.shelfEl?.querySelector<HTMLElement>(".fb-shelf-actions .fb-tool-btn")?.setAttr("aria-label", i18n.clearShelfAria());
+    const selShelf = this.selectionBarEl?.querySelector<HTMLElement>(".fb-selection-btn");
+    if (selShelf) selShelf.setText(i18n.shelf());
+    this.selectionBarEl?.querySelector<HTMLElement>(".fb-tool-btn")?.setAttr("aria-label", i18n.clearSelectionAria());
+    this.updateToolbarStates();
+    this.renderShelf();
+    this.renderSelectionBar();
+    this.renderCarryPill();
   }
 
   private isInputFocused(): boolean {
@@ -499,7 +522,7 @@ export class FolderBoardView extends ItemView {
 
     this.backBtnEl = navLeft.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "상위 폴더 (Backspace)" }
+      attr: { "aria-label": i18n.parentFolderAria() }
     });
     setIcon(this.backBtnEl, "arrow-left");
     this.backBtnEl.addEventListener("click", () => this.goUp());
@@ -513,11 +536,11 @@ export class FolderBoardView extends ItemView {
     this.searchInputEl = searchWrap.createEl("input", {
       type: "search",
       cls: "fb-search-input",
-      placeholder: "검색..."
+      placeholder: i18n.searchPlaceholder()
     });
     this.clearSearchEl = searchWrap.createDiv({
       cls: "search-input-clear-button is-hidden",
-      attr: { "aria-label": "검색 지우기" }
+      attr: { "aria-label": i18n.clearSearchAria() }
     });
 
     this.searchInputEl.addEventListener("input", () => {
@@ -549,9 +572,9 @@ export class FolderBoardView extends ItemView {
     // [ID 6.5.12] 3대 레이아웃 세그먼트 (Flow 기본 최좌측 · Vertical 세로 스크롤 · Horizontal 가로 스크롤)
     const colGroup = controls.createDiv({ cls: "fb-segmented" });
     const layoutOptions: Array<{ value: LayoutColumns; label: string; aria: string; icon?: string }> = [
-      { value: "flow", label: "", aria: "Flow 모드 — 연속 다단 트리 (기본)", icon: "list-tree" },
-      { value: "vertical", label: "", aria: "Vertical 모드 — 세로 스크롤 카드 (경계 드래그 분할)", icon: "layout-grid" },
-      { value: "horizontal", label: "", aria: "Horizontal 모드 — 가로 스크롤 카드 (경계 드래그 분할)", icon: "columns" }
+      { value: "flow", label: "", aria: i18n.layoutFlowAria(), icon: "list-tree" },
+      { value: "vertical", label: "", aria: i18n.layoutVerticalAria(), icon: "layout-grid" },
+      { value: "horizontal", label: "", aria: i18n.layoutHorizontalAria(), icon: "columns" }
     ];
 
     this.layoutBtns = layoutOptions.map((opt) => {
@@ -580,7 +603,7 @@ export class FolderBoardView extends ItemView {
     // [ID 6.5.66] 현재 레이아웃 모드 폴더 순서 1회 정렬 버튼 (고정 없음 · 정렬 직후 자유 드래그 가능)
     this.folderSortBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "폴더 순서 정렬 (현재 모드 1회 정렬 · 이후 자유 드래그)" }
+      attr: { "aria-label": i18n.folderSortAria() }
     });
     setIcon(
       this.folderSortBtnEl,
@@ -606,7 +629,7 @@ export class FolderBoardView extends ItemView {
     // [ID 6.5.62] 보드 상단 좌측 패널 자동 접기 토글 (설정 탭과 양방향 동기화)
     this.sidebarAutoCollapseBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "폴더 보드에서 좌측 패널 자동 접기" }
+      attr: { "aria-label": i18n.autoCollapseSidebarAria() }
     });
     setIcon(this.sidebarAutoCollapseBtnEl, "panel-left-close");
     this.sidebarAutoCollapseBtnEl.addEventListener("click", () => {
@@ -616,7 +639,7 @@ export class FolderBoardView extends ItemView {
     // [ID 6.5.61] 보드 상단 원클릭 탭 고정(Pin) 토글 -> 설정 탭에 가지 않고 즉시 고정/해제 및 설정 기억
     this.pinBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "탭 고정 (Pin)" }
+      attr: { "aria-label": i18n.pinTabAria() }
     });
     setIcon(this.pinBtnEl, "pin");
     this.pinBtnEl.addEventListener("click", () => {
@@ -630,7 +653,7 @@ export class FolderBoardView extends ItemView {
     // Quick Edit / Quick Look 토글
     this.qlBtnEl = controls.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "빠른 편집 (Space)" }
+      attr: { "aria-label": i18n.quickEditAria() }
     });
     setIcon(this.qlBtnEl, "panel-right");
     this.qlBtnEl.addEventListener("click", () => {
@@ -718,7 +741,7 @@ export class FolderBoardView extends ItemView {
 
     this.shelfDropHereBtn = shelfActions.createEl("button", {
       cls: "mod-cta fb-compact-btn",
-      text: "이동"
+      text: i18n.move()
     });
     this.shelfDropHereBtn.addEventListener("click", () => {
       const target = this.getFocusedTargetFolderPath();
@@ -727,7 +750,7 @@ export class FolderBoardView extends ItemView {
 
     const shelfClearBtn = shelfActions.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "바구니 비우기" }
+      attr: { "aria-label": i18n.clearShelfAria() }
     });
     setIcon(shelfClearBtn, "x");
     shelfClearBtn.addEventListener("click", () => {
@@ -741,7 +764,7 @@ export class FolderBoardView extends ItemView {
 
     const selShelfBtn = this.selectionBarEl.createEl("button", {
       cls: "clickable-icon fb-selection-btn",
-      text: "바구니"
+      text: i18n.shelf()
     });
     selShelfBtn.addEventListener("click", () => {
       this.addPathsToShelf([...this.selectedPaths]);
@@ -749,7 +772,7 @@ export class FolderBoardView extends ItemView {
 
     const selClearBtn = this.selectionBarEl.createEl("button", {
       cls: "clickable-icon fb-tool-btn",
-      attr: { "aria-label": "선택 해제" }
+      attr: { "aria-label": i18n.clearSelectionAria() }
     });
     setIcon(selClearBtn, "x");
     selClearBtn.addEventListener("click", () => {
@@ -1108,8 +1131,8 @@ export class FolderBoardView extends ItemView {
 
   private updateActionTooltipsOnly(): void {
     const targetLabel = this.getFocusedFolderDisplayName();
-    this.newNoteBtnEl.setAttr("aria-label", `새 노트 → ${targetLabel} (N)`);
-    this.newFolderBtnEl.setAttr("aria-label", `새 폴더 → ${targetLabel} (Shift+N)`);
+    this.newNoteBtnEl.setAttr("aria-label", i18n.newNoteAria(targetLabel));
+    this.newFolderBtnEl.setAttr("aria-label", i18n.newFolderAria(targetLabel));
   }
 
   private updateToolbarStates(): void {
@@ -1127,7 +1150,10 @@ export class FolderBoardView extends ItemView {
       this.sortBtnEl.empty();
       setIcon(this.sortBtnEl, nextSortIcon);
     }
-    this.sortBtnEl.setAttr("aria-label", s.sortBy === "name" ? "파일 정렬: 이름순" : "파일 정렬: 최근 수정순");
+    this.sortBtnEl.setAttr(
+      "aria-label",
+      s.sortBy === "name" ? i18n.fileSortNameAria() : i18n.fileSortMtimeAria()
+    );
 
     this.updateActionTooltipsOnly();
     this.syncSidebarCollapseButtonState();
@@ -1245,21 +1271,7 @@ export class FolderBoardView extends ItemView {
   }
 
   private formatCardRowUnitsLabel(units: number): string {
-    switch (units) {
-      case 3:
-        return "1/4 높이";
-      case 4:
-        return "1/3 높이";
-      case 6:
-        return "1/2 높이";
-      case 8:
-        return "2/3 높이";
-      case 9:
-        return "3/4 높이";
-      case 12:
-      default:
-        return "전체 높이";
-    }
+    return i18n.cardRowUnitsLabel(units);
   }
 
   private showResizeBadge(text: string, clientX: number, clientY: number): void {
@@ -1366,7 +1378,7 @@ export class FolderBoardView extends ItemView {
     this.applyGridLayoutClasses(cards.length);
 
     if (cards.length === 0) {
-      this.gridEl.createDiv({ cls: "fb-empty-grid", text: "일치하는 항목이 없습니다" });
+      this.gridEl.createDiv({ cls: "fb-empty-grid", text: i18n.noMatches() });
       this.colResizersEl?.empty();
       return;
     }
@@ -1440,7 +1452,7 @@ export class FolderBoardView extends ItemView {
         cls: "fb-col-resizer",
         attr: {
           "data-col-index": String(k),
-          "aria-label": "가로 분할 수 조절 (좌우 드래그)"
+          "aria-label": i18n.colResizeAria()
         }
       });
       this.positionCardGridColResizer(handle, k, colW);
@@ -1467,7 +1479,7 @@ export class FolderBoardView extends ItemView {
         let latestCols = startCols;
         handle.addClass("is-dragging");
         document.body.style.cursor = "col-resize";
-        this.showResizeBadge(`${latestCols}열 분할`, e.clientX, e.clientY);
+        this.showResizeBadge(i18n.colSplitBadge(latestCols), e.clientX, e.clientY);
 
         const allHandles = Array.from(this.colResizersEl.querySelectorAll<HTMLElement>(".fb-col-resizer"));
 
@@ -1492,7 +1504,7 @@ export class FolderBoardView extends ItemView {
               this.positionCardGridColResizer(h, idx, nextColW);
             }
           }
-          this.showResizeBadge(`${latestCols}열 분할`, ev.clientX, ev.clientY);
+          this.showResizeBadge(i18n.colSplitBadge(latestCols), ev.clientX, ev.clientY);
         };
 
         const onUp = () => {
@@ -1547,7 +1559,7 @@ export class FolderBoardView extends ItemView {
         cls: "fb-col-resizer",
         attr: {
           "data-col-index": String(k),
-          "aria-label": "다단 너비 조절 (드래그)"
+          "aria-label": i18n.flowColResizeAria()
         }
       });
       this.positionFlowColResizer(handle, k, colW);
@@ -1599,23 +1611,39 @@ export class FolderBoardView extends ItemView {
     return cardModel.isRootCard ? "__root__" : cardModel.folderPath;
   }
 
-  // [ID 6.5.47] 여러줄 모드 카드 1열 꽉 찬 최대 행 수 정밀 산출
-  // -> .fb-grid 실제 내부 높이와 실측 행 높이(flow 모드는 gap 0)를 그대로 사용해 화면 하단까지 빈틈없이 딱 맞게 채움.
+  // [ID 6.5.47] Flow 모드 카드 1열 꽉 찬 최대 행 수 정밀 산출
+  // -> 다단 분할로 .fb-card-header/.fb-row의 BoundingRect 높이가 열 전체로 부풀어 오르는 오차를 막기 위해
+  // -> 정상 범위(행 18~42px, 헤더 20~48px) 샘플만 채택하고 canvasEl 실측 높이를 안전 반영함.
   private measureFlowRowHeight(): number {
-    const sampleRow = this.gridEl?.querySelector<HTMLElement>(".fb-row");
-    const measured = sampleRow ? sampleRow.getBoundingClientRect().height : 27;
-    return Math.max(22, Math.min(40, measured || 27));
+    if (this.gridEl) {
+      const rows = this.gridEl.querySelectorAll<HTMLElement>(".fb-row");
+      for (const r of Array.from(rows)) {
+        const h = r.offsetHeight || r.getBoundingClientRect().height;
+        if (h >= 18 && h <= 42) {
+          return Math.max(22, Math.min(38, h));
+        }
+      }
+    }
+    return 27;
   }
 
   private getFlowMaxOneColumnItems(cardModel: BoardCardModel): number {
-    const gridH = this.gridEl?.clientHeight || Math.max(240, (this.canvasEl?.clientHeight || 720) - 24);
+    const canvasInnerH = Math.max(240, (this.canvasEl?.clientHeight || 720) - 20);
+    const gridH = Math.max(this.gridEl?.clientHeight || 0, canvasInnerH);
     const rowH = this.measureFlowRowHeight();
-    const sampleHeader = !cardModel.isRootCard
-      ? this.gridEl?.querySelector<HTMLElement>(".fb-card-header")
-      : null;
-    const headerH = sampleHeader ? sampleHeader.getBoundingClientRect().height : 28;
-    // border(2) + card padding(10) + header + body padding(3) + scroll footer(12) + 여유(1)
-    const chromeH = cardModel.isRootCard ? 16 : Math.ceil(headerH) + 28;
+    let headerH = 28;
+    if (!cardModel.isRootCard && this.gridEl) {
+      const headers = this.gridEl.querySelectorAll<HTMLElement>(".fb-card-header");
+      for (const h of Array.from(headers)) {
+        const rectH = h.offsetHeight || h.getBoundingClientRect().height;
+        if (rectH >= 20 && rectH <= 48) {
+          headerH = rectH;
+          break;
+        }
+      }
+    }
+    // border(2) + card padding(8) + margin(8) + header + body padding(3) + 하단 호버바 여유(8)
+    const chromeH = cardModel.isRootCard ? 26 : Math.ceil(headerH) + 36;
     const usableH = Math.max(rowH * FLOW_SIZE_SM, gridH - chromeH);
     return Math.max(FLOW_SIZE_SM, Math.floor(usableH / rowH));
   }
@@ -1624,7 +1652,7 @@ export class FolderBoardView extends ItemView {
     const key = this.getFlowWindowKey(cardModel);
     const spec = this.plugin.getFlowWindowSizeSpec(key);
     const maxOneCol = this.getFlowMaxOneColumnItems(cardModel);
-    const maxDragItems = maxOneCol * FLOW_MAX_DRAG_COLS;
+    const maxDragItems = Math.max(maxOneCol * FLOW_MAX_DRAG_COLS, FLOW_MAX_DRAG_ROWS);
 
     if (spec === "sm") return Math.min(cardModel.items.length, FLOW_SIZE_SM);
     if (spec === "lg") return Math.min(cardModel.items.length, maxOneCol);
@@ -1983,7 +2011,7 @@ export class FolderBoardView extends ItemView {
           cls: "fb-root-hover-grip",
           attr: {
             draggable: "true",
-            "aria-label": "드래그하거나 Shift+←/→로 직속 카드 위치 이동"
+            "aria-label": i18n.rootMoveGripAria()
           }
         });
         setIcon(hoverGrip, "grip-horizontal");
@@ -2030,7 +2058,7 @@ export class FolderBoardView extends ItemView {
         const iconEl = titleWrap.createSpan({ cls: "fb-native-icon" });
         setIcon(iconEl, "inbox");
         titleWrap.createSpan({ cls: "fb-card-title", text: cardModel.title });
-        titleWrap.createSpan({ cls: "fb-root-pill", text: "직속" });
+        titleWrap.createSpan({ cls: "fb-root-pill", text: i18n.directPill() });
 
         const metaEl = rootHeader.createDiv({ cls: "fb-card-meta" });
         metaEl.createSpan({
@@ -2092,7 +2120,7 @@ export class FolderBoardView extends ItemView {
 
       const drillBtn = metaEl.createEl("button", {
         cls: "clickable-icon fb-drill-btn",
-        attr: { "aria-label": `${cardModel.title} 열기` }
+        attr: { "aria-label": i18n.openItemAria(cardModel.title) }
       });
       setIcon(drillBtn, "arrow-right");
       drillBtn.addEventListener("click", (e) => {
@@ -2131,7 +2159,7 @@ export class FolderBoardView extends ItemView {
     if (!isFlowMode) {
       const resizeBottom = cardEl.createDiv({
         cls: "fb-card-resize-bottom",
-        attr: { "aria-label": "카드 높이 조절 (상하 드래그 · 더블클릭 전체/기본)" }
+        attr: { "aria-label": i18n.cardHeightResizeAria() }
       });
 
       resizeBottom.addEventListener("dblclick", (e: MouseEvent) => {
@@ -2182,7 +2210,7 @@ export class FolderBoardView extends ItemView {
           }
           const isAtMin = latestUnits === allowed[0] && startH + dy < GRID_CARD_MIN_HEIGHT;
           const label = isAtMin
-            ? `${this.formatCardRowUnitsLabel(latestUnits)} (최소)`
+            ? i18n.cardRowUnitsMinBadge(latestUnits)
             : this.formatCardRowUnitsLabel(latestUnits);
           this.showResizeBadge(label, ev.clientX, ev.clientY);
         };
@@ -2244,7 +2272,7 @@ export class FolderBoardView extends ItemView {
     });
 
     if (cardModel.items.length === 0) {
-      listEl.createDiv({ cls: "fb-empty-card", text: "비어 있음" });
+      listEl.createDiv({ cls: "fb-empty-card", text: i18n.emptyCard() });
       return listEl;
     }
 
@@ -2258,24 +2286,24 @@ export class FolderBoardView extends ItemView {
     if (isResizableFlowCard) {
       const footer = cardEl.createDiv({
         cls: "fb-flow-scroll-footer" + (isScrollableWindow ? "" : " is-unscrolled"),
-        attr: { "aria-label": "드래그로 길이 조절 또는 소/중/대 선택" }
+        attr: { "aria-label": i18n.flowFooterAria() }
       });
 
       const sizeBar = footer.createDiv({ cls: "fb-flow-size-bar" });
       // [ID 6.5.53] 호버 선택바 좌측 상하 드래그 손잡이(↕) -> 드래그 리사이징 가능성을 직관적으로 안내
       const dragHandle = sizeBar.createSpan({
         cls: "fb-flow-drag-handle",
-        attr: { "aria-label": "위아래 드래그로 길이 조절" }
+        attr: { "aria-label": i18n.flowDragHandleAria() }
       });
       setIcon(dragHandle, "chevrons-up-down");
       sizeBar.createSpan({ cls: "fb-flow-size-sep" });
 
       const sizePresets: Array<{ spec: "sm" | "md" | "lg"; label: string; aria: string }> = [
-        { spec: "sm", label: "소", aria: `소 (${FLOW_SIZE_SM}개)` },
-        { spec: "md", label: "중", aria: `중 (기본 ${FLOW_WINDOW_SIZE}개)` }
+        { spec: "sm", label: i18n.flowPresetSm(), aria: i18n.flowPresetSmAria(FLOW_SIZE_SM) },
+        { spec: "md", label: i18n.flowPresetMd(), aria: i18n.flowPresetMdAria(FLOW_WINDOW_SIZE) }
       ];
       if (cardModel.items.length > FLOW_WINDOW_SIZE) {
-        sizePresets.push({ spec: "lg", label: "대", aria: "대 (1열 꽉차게)" });
+        sizePresets.push({ spec: "lg", label: i18n.flowPresetLg(), aria: i18n.flowPresetLgAria() });
       }
 
       let suppressNextClick = false;
@@ -2308,14 +2336,14 @@ export class FolderBoardView extends ItemView {
         if (e.button !== 0) return;
         e.stopPropagation();
 
-        // [ID 6.5.55] 하단 드래그 최대 4열 확장 지원 (상하 드래그 + 우측/좌측 다단 드래그 동시 대응)
-        // -> 화면 하단에 닿아도 우측으로 끌면 2~4열까지 매끄럽게 확장되며, 28px 가로 데드존으로 수직 드래그 흔들림을 방지함.
+        // [ID 6.5.55] 하단 드래그 최대 200행 자유 확장 지원 (상하 드래그 + 우측/좌측 다단 드래그 동시 대응)
+        // -> 화면 하단에 닿아도 우측으로 끌면 여러 열에 걸쳐 최대 200행까지 매끄럽게 확장됨.
         const startX = e.clientX;
         const startY = e.clientY;
         const startRows = Math.min(cardModel.items.length, this.getFlowWindowLimit(cardModel));
         const rowH = this.measureFlowRowHeight();
         const maxOneCol = this.getFlowMaxOneColumnItems(cardModel);
-        const maxDragLimit = maxOneCol * FLOW_MAX_DRAG_COLS;
+        const maxDragLimit = Math.max(maxOneCol * FLOW_MAX_DRAG_COLS, FLOW_MAX_DRAG_ROWS);
         const maxRows = Math.min(cardModel.items.length, maxDragLimit);
         const minRows = Math.min(2, cardModel.items.length);
         const colPitch = this.clampFlowColWidth(this.plugin.settings.flowColumnWidth) + FLOW_COL_GAP;
@@ -2338,12 +2366,12 @@ export class FolderBoardView extends ItemView {
           const nextRows = Math.max(minRows, Math.min(maxRows, startRows + deltaRows));
 
           if (nextRows >= maxDragLimit && cardModel.items.length > maxDragLimit) {
-            dragBadge.setText(`${nextRows}개 · 최대 ${FLOW_MAX_DRAG_COLS}열`);
+            dragBadge.setText(i18n.flowDragRowsMaxLimit(nextRows));
           } else if (nextRows > maxOneCol) {
-            const cols = Math.min(FLOW_MAX_DRAG_COLS, Math.ceil(nextRows / maxOneCol));
-            dragBadge.setText(`${nextRows}개 (${cols}열)`);
+            const cols = Math.ceil(nextRows / maxOneCol);
+            dragBadge.setText(i18n.flowDragRowsCols(nextRows, cols));
           } else {
-            dragBadge.setText(`${nextRows}개`);
+            dragBadge.setText(i18n.flowDragRows(nextRows));
           }
 
           if (nextRows !== latestRows) {
@@ -2447,7 +2475,7 @@ export class FolderBoardView extends ItemView {
         if (isFlowMode) {
           const rowDrillBtn = row.createEl("button", {
             cls: "clickable-icon fb-row-drill-btn",
-            attr: { "aria-label": `${item.name} 열기` }
+            attr: { "aria-label": i18n.openItemAria(item.name) }
           });
           setIcon(rowDrillBtn, "arrow-right");
           rowDrillBtn.addEventListener("click", (e) => {
@@ -2541,7 +2569,7 @@ export class FolderBoardView extends ItemView {
     this.shelfListEl.empty();
 
     if (!hasItems) {
-      this.shelfListEl.createSpan({ cls: "fb-shelf-hint", text: "임시 보관" });
+      this.shelfListEl.createSpan({ cls: "fb-shelf-hint", text: i18n.shelfEmptyHint() });
       return;
     }
 
@@ -2570,14 +2598,14 @@ export class FolderBoardView extends ItemView {
     const hide = count < 2 || this.carryPaths.length > 0 || this.clipboardPaths.length > 0;
     this.selectionBarEl.toggleClass("is-hidden", hide);
     if (!hide) {
-      this.selectionCountEl.setText(`${count}개 선택됨`);
+      this.selectionCountEl.setText(i18n.selectedCount(count));
     }
   }
 
   private renderCarryPill(): void {
     if (this.carryPaths.length > 0 && this.carryTargetFolderPath !== null) {
       const targetName = this.carryTargetFolderPath || this.app.vault.getName();
-      this.carryPillEl.setText(`${this.carryPaths.length}개 → ${targetName}`);
+      this.carryPillEl.setText(i18n.carryPill(this.carryPaths.length, targetName));
       this.carryPillEl.removeClass("is-hidden");
       return;
     }
@@ -2588,8 +2616,8 @@ export class FolderBoardView extends ItemView {
     if (this.clipboardPaths.length > 0 && this.clipboardMode) {
       const label =
         this.clipboardMode === "copy"
-          ? `${this.clipboardPaths.length}개 복사됨 · ⌘V 붙여넣기`
-          : `${this.clipboardPaths.length}개 잘라냄 · ⌘V 이동`;
+          ? i18n.clipboardCopied(this.clipboardPaths.length)
+          : i18n.clipboardCut(this.clipboardPaths.length);
       this.carryPillEl.setText(label);
       this.carryPillEl.removeClass("is-hidden");
       return;
@@ -3321,15 +3349,15 @@ export class FolderBoardView extends ItemView {
     this.syncScopeState();
 
     const modal = new NamePromptModal(this.app, {
-      title: "새 노트",
-      placeholder: "노트 제목",
+      title: i18n.newNote(),
+      placeholder: i18n.noteTitlePlaceholder(),
       destinationLabel: destLabel,
-      confirmLabel: "생성",
+      confirmLabel: i18n.create(),
       onSubmit: async (rawName) => {
         const cleanName = rawName.endsWith(".md") ? rawName : `${rawName}.md`;
         const fullPath = normalizePath(targetFolderPath ? `${targetFolderPath}/${cleanName}` : cleanName);
         if (this.app.vault.getAbstractFileByPath(fullPath)) {
-          new Notice("같은 이름의 파일이 이미 존재합니다.");
+          new Notice(i18n.fileAlreadyExists());
           return;
         }
         try {
@@ -3342,7 +3370,7 @@ export class FolderBoardView extends ItemView {
           this.renderAll();
           this.scrollFocusedIntoView();
         } catch (err) {
-          new Notice(`노트 생성 실패: ${err instanceof Error ? err.message : String(err)}`);
+          new Notice(i18n.createNoteFailed(err instanceof Error ? err.message : String(err)));
         }
       }
     });
@@ -3367,14 +3395,14 @@ export class FolderBoardView extends ItemView {
     this.syncScopeState();
 
     const modal = new NamePromptModal(this.app, {
-      title: "새 폴더",
-      placeholder: "폴더 이름",
+      title: i18n.newFolder(),
+      placeholder: i18n.folderNamePlaceholder(),
       destinationLabel: destLabel,
-      confirmLabel: "생성",
+      confirmLabel: i18n.create(),
       onSubmit: async (rawName) => {
         const fullPath = normalizePath(targetFolderPath ? `${targetFolderPath}/${rawName}` : rawName);
         if (this.app.vault.getAbstractFileByPath(fullPath)) {
-          new Notice("같은 이름의 폴더가 이미 존재합니다.");
+          new Notice(i18n.folderAlreadyExists());
           return;
         }
         try {
@@ -3387,7 +3415,7 @@ export class FolderBoardView extends ItemView {
           this.renderAll();
           this.scrollFocusedIntoView();
         } catch (err) {
-          new Notice(`폴더 생성 실패: ${err instanceof Error ? err.message : String(err)}`);
+          new Notice(i18n.createFolderFailed(err instanceof Error ? err.message : String(err)));
         }
       }
     });
@@ -3474,7 +3502,7 @@ export class FolderBoardView extends ItemView {
       if (!rawName) return;
 
       if (/[\\/:*?"<>|]/.test(rawName)) {
-        new Notice("파일/폴더 이름에 사용할 수 없는 문자가 포함되어 있습니다.");
+        new Notice(i18n.invalidNameChars());
         return;
       }
 
@@ -3483,7 +3511,7 @@ export class FolderBoardView extends ItemView {
       const destPath = normalizePath(parentPath ? `${parentPath}/${finalName}` : finalName);
       if (destPath === target.path) return;
       if (this.app.vault.getAbstractFileByPath(destPath)) {
-        new Notice("같은 이름이 이미 존재합니다.");
+        new Notice(i18n.sameNameExists());
         return;
       }
 
@@ -3495,7 +3523,7 @@ export class FolderBoardView extends ItemView {
         this.renderAll();
         this.scrollFocusedIntoView();
       } catch (err) {
-        new Notice(`이름 변경 실패: ${err instanceof Error ? err.message : String(err)}`);
+        new Notice(i18n.renameFailed(err instanceof Error ? err.message : String(err)));
       }
     };
 
@@ -3537,24 +3565,24 @@ export class FolderBoardView extends ItemView {
     this.syncScopeState();
 
     const modal = new NamePromptModal(this.app, {
-      title: "이름 바꾸기",
-      placeholder: "새 이름",
+      title: i18n.rename(),
+      placeholder: i18n.newNamePlaceholder(),
       initialValue: initial,
-      confirmLabel: "변경",
+      confirmLabel: i18n.renameConfirm(),
       onSubmit: async (rawName) => {
         const finalName = isMd && !rawName.endsWith(".md") ? `${rawName}.md` : rawName;
         const parentPath = normalizeFolderRef(target.parent);
         const destPath = normalizePath(parentPath ? `${parentPath}/${finalName}` : finalName);
         if (destPath === target.path) return;
         if (this.app.vault.getAbstractFileByPath(destPath)) {
-          new Notice("같은 이름이 이미 존재합니다.");
+          new Notice(i18n.sameNameExists());
           return;
         }
         try {
           await this.app.fileManager.renameFile(target, destPath);
           this.renderAll();
         } catch (err) {
-          new Notice(`이름 변경 실패: ${err instanceof Error ? err.message : String(err)}`);
+          new Notice(i18n.renameFailed(err instanceof Error ? err.message : String(err)));
         }
       }
     });
@@ -3611,7 +3639,7 @@ export class FolderBoardView extends ItemView {
     if (deleted > 0) {
       this.selectedPaths.clear();
       this.selectionAnchorIndex = null;
-      new Notice(`${deleted}개 항목을 휴지통으로 이동했습니다.`);
+      new Notice(i18n.trashedItems(deleted));
       this.renderAll();
     }
   }
@@ -3732,7 +3760,7 @@ export class FolderBoardView extends ItemView {
       this.selectionAnchorIndex = null;
       if (firstCreatedKey) this.focusedItemKey = firstCreatedKey;
       const destName = destFolderPath || this.app.vault.getName();
-      new Notice(`${copiedCount}개 항목을 '${destName}'에 복사했습니다.`);
+      new Notice(i18n.copiedItems(copiedCount, destName));
       this.renderAll();
       this.scrollFocusedIntoView();
     }
@@ -4047,7 +4075,7 @@ export class FolderBoardView extends ItemView {
     const menu = new Menu();
     menu.addItem((item) =>
       item
-        .setTitle("폴더 이름순 (A → Z)")
+        .setTitle(i18n.sortFolderNameAsc())
         .setIcon(this.pickAvailableIcon(["arrow-down-az", "arrow-down-a-z", "sort-asc", "arrow-down"]))
         .onClick(() => {
           void this.applyOneShotFolderSort("name-asc");
@@ -4055,7 +4083,7 @@ export class FolderBoardView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("폴더 이름 역순 (Z → A)")
+        .setTitle(i18n.sortFolderNameDesc())
         .setIcon(this.pickAvailableIcon(["arrow-up-za", "arrow-up-z-a", "sort-desc", "arrow-up"]))
         .onClick(() => {
           void this.applyOneShotFolderSort("name-desc");
@@ -4063,7 +4091,7 @@ export class FolderBoardView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("항목 많은 순")
+        .setTitle(i18n.sortFolderCountDesc())
         .setIcon(this.pickAvailableIcon(["arrow-down-wide-narrow", "bar-chart-2", "list-ordered", "hash"]))
         .onClick(() => {
           void this.applyOneShotFolderSort("count-desc");
@@ -4071,7 +4099,7 @@ export class FolderBoardView extends ItemView {
     );
     menu.addItem((item) =>
       item
-        .setTitle("최근 수정 순")
+        .setTitle(i18n.sortFolderMtimeDesc())
         .setIcon(this.pickAvailableIcon(["clock", "history"]))
         .onClick(() => {
           void this.applyOneShotFolderSort("mtime-desc");
@@ -4200,7 +4228,10 @@ export class FolderBoardView extends ItemView {
       : path;
     const ghost = document.body.createDiv({
       cls: "fb-drag-ghost",
-      text: this.activeDragPaths.length > 1 ? `${label} 외 ${this.activeDragPaths.length - 1}개` : label
+      text:
+        this.activeDragPaths.length > 1
+          ? i18n.dragGhostMulti(label, this.activeDragPaths.length - 1)
+          : label
     });
     e.dataTransfer.setDragImage(ghost, 12, 12);
     requestAnimationFrame(() => ghost.remove());
@@ -4384,11 +4415,11 @@ export class FolderBoardView extends ItemView {
       this.focusedItemKey = `${firstMovedType}:${moves[0].toPath}`;
 
       const destName = destFolderPath || this.app.vault.getName();
-      new Notice(`${moves.length}개 항목을 '${destName}'로 이동했습니다.`);
+      new Notice(i18n.movedItems(moves.length, destName));
       this.renderAll();
       this.scrollFocusedIntoView();
     } else if (skipped > 0) {
-      new Notice("대상 폴더에 같은 이름이 있거나 이동할 수 없는 경로입니다.");
+      new Notice(i18n.moveFailedConflict());
     } else {
       this.syncFocusAndSelectionDOM();
     }
@@ -4412,7 +4443,7 @@ export class FolderBoardView extends ItemView {
     }
 
     if (restored > 0) {
-      new Notice(`${restored}개 항목 이동을 되돌렸습니다.`);
+      new Notice(i18n.undidMove(restored));
       this.renderAll();
     }
   }
@@ -4993,13 +5024,17 @@ export class FolderBoardView extends ItemView {
           }
           return;
         }
+        if (e.key === "ArrowUp" && this.focusedCardIndex === 0) {
+          this.focusSearchBox();
+          return;
+        }
         if (hasHeaderStop) this.focusCardHeader(this.focusedCardIndex);
         return;
       }
 
       if (e.key === "ArrowUp") {
+        // [ID 6.5.71] 맨 첫 번째 카드 최상단(직속 첫 항목 또는 첫 카드 헤더)에서 ↑ 입력 시 검색창으로 자연 연결
         if (onHeader || (!hasHeaderStop && itemIndex <= 0)) {
-          // 위쪽 연결 카드가 있으면 그 카드 최하단으로 이동, 최상단 끝에서는 loop 설정이 아닐 경우 제자리에 멈춤
           const aboveIdx = this.findVerticalNeighborCard(this.focusedCardIndex, "up");
           if (aboveIdx >= 0) {
             const aboveCard = this.renderedCards[aboveIdx];
@@ -5011,6 +5046,8 @@ export class FolderBoardView extends ItemView {
             } else if (!aboveCard.isRootCard) {
               this.focusCardHeader(aboveIdx);
             }
+          } else if (this.focusedCardIndex === 0) {
+            this.focusSearchBox();
           } else if (shouldLoopAtEdge) {
             this.focusCardItem(this.focusedCardIndex, count - 1, {
               clearSelection: true,
@@ -5018,8 +5055,12 @@ export class FolderBoardView extends ItemView {
             });
           }
         } else if (itemIndex <= 0) {
-          // 첫 번째 항목에서 ↑ -> 카드 폴더 헤더 포커스 (Enter로 진입 가능)
-          this.focusCardHeader(this.focusedCardIndex);
+          if (this.focusedCardIndex === 0 && card.isRootCard) {
+            this.focusSearchBox();
+          } else {
+            // 첫 번째 항목에서 ↑ -> 카드 폴더 헤더 포커스 (Enter로 진입 가능)
+            this.focusCardHeader(this.focusedCardIndex);
+          }
         } else {
           this.focusCardItem(this.focusedCardIndex, itemIndex - 1, {
             clearSelection: true,

@@ -1,6 +1,7 @@
 // [ID 6.3] 모던 미니멀 이름 입력 모달 (새 노트 / 새 폴더 / 이름 변경 공용)
 // -> Electron 기반 옵시디언에서는 window.prompt()가 차단되므로 네이티브 Modal 기반의 경량 입력창을 제공함.
 import { App, Modal } from "obsidian";
+import { i18n } from "./i18n";
 
 export interface NamePromptOptions {
   title: string;
@@ -42,10 +43,10 @@ export class NamePromptModal extends Modal {
     });
 
     const footer = contentEl.createDiv({ cls: "fb-prompt-footer" });
-    const cancelBtn = footer.createEl("button", { text: "취소" });
+    const cancelBtn = footer.createEl("button", { text: i18n.cancel() });
     const submitBtn = footer.createEl("button", {
       cls: "mod-cta",
-      text: this.opts.confirmLabel || "생성"
+      text: this.opts.confirmLabel || i18n.create()
     });
 
     const commit = async () => {
